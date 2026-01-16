@@ -1,0 +1,50 @@
+[package]
+name = "xlstm-rs"
+version = "0.1.0"
+edition = "2024"
+description = "xLSTM: Extended Long Short-Term Memory implementation in Rust using Burn"
+
+
+[dependencies]
+candle-core = { version = "0.8.2", features = [] }
+candle-nn = "0.8.2"
+candle-transformers = "0.8.2"
+safetensors = "0.4.1"
+anyhow = "1.0"
+chrono = "0.4.42"
+csv = "1.3.1"
+env_logger = "0.11.8"
+log = "0.4.28"
+ndarray = "0.16.1"
+num-traits = "0.2.19"
+plotters = "0.3.7"
+rand = "0.9.2"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0"
+tokenizers = "0.21.0"
+
+[lib]
+name = "xlstm"
+path = "src/lib.rs"
+
+[[bin]]
+name = "main"
+path = "src/main.rs"
+
+[[bin]]
+name = "mlstmchat"
+path = "src/msltmchat.rs"
+
+[[bin]]
+name = "slstmchat"
+path = "src/slstmchat.rs"
+
+
+[[bin]]
+name = "xlstmchat"
+path = "src/xlstmchat.rs"
+
+[profile.release]
+#opt-level = 3
+lto = "fat"
+#codegen-units = 1

@@ -1,0 +1,108 @@
+====================================================
+<<<<<<< HEAD
+ÉPOCA: 1 | LOSS: 6.0082 | ACC: 7.79%
+SEMILLA: el Dios de Israel .
+----------------------------------------------------
+el Dios de Israel .4Enloshijosylosquese,yloshombresdelosquesehaensushijos.107)Enlosmaltadelosquese,ydeYahveh,elquetelatierra.24No,consushijosdelatierra.4¿NoeslatierradelosquenoseensushijosdelosqueelSeñor,comoselo,yleenelhombre,quese,enlatierra,asumano,yelreydelatierra
+=======
+ÉPOCA: 1 | LOSS: 5.3909 | ACC: 6.51%
+SEMILLA: l ad i es ,
+----------------------------------------------------
+l ad i es ,Ihaved,you,Had,I'ss,mytandd.PIO:Iknowyou,Iknow'diss,andands,Andyou,Ihavethed;AndIpr,myst,I'll,ITAAA:I's,Andyou,mydt,andandthes.GPA:Iamtes,andtachs,I'sandcco
+>>>>>>> 5d1abb0c2ca1c86786be9210a57c232a052d8e29
+====================================================
+
+
+====================================================
+<<<<<<< HEAD
+ÉPOCA: 1 | LOSS: 5.5608 | ACC: 10.21%
+SEMILLA: en Yahveh , el cual
+----------------------------------------------------
+en Yahveh , el cualqueasushijos,yelquesedeloscielos,ylatierra,yelSeñor,ydeloscielosdelosquesedelas,ylatierra,ylosqueseos,yelhombredelhombreyeldíadelosquenosehaalapalabradelosojosysedelasensumano,elSeñor,ydelaciudaddeYahveh,ylatierra.9Ylatierra,ylatierra.3Noseos.2El
+=======
+ÉPOCA: 1 | LOSS: 4.7636 | ACC: 10.64%
+SEMILLA: f rown . G R
+----------------------------------------------------
+f rown . G RTPRIO:BA:Iwill,Iknowsandyou,you,myself.PARETIS:Shor,IwillbeforeI'llds,Andsandather;Andbefore,andIhaved,sir,mylord,andIhavenot,sir.PETRPATISA:TATRUCHIO:PETTHAPETRUCHIO:Let,andyou
+>>>>>>> 5d1abb0c2ca1c86786be9210a57c232a052d8e29
+====================================================
+
+
+====================================================
+<<<<<<< HEAD
+ÉPOCA: 1 | LOSS: 5.4341 | ACC: 10.87%
+SEMILLA: j ad ores de c
+----------------------------------------------------
+j ad ores de cé.14Yasupueblo.13Delatierra,sesealatierra,quetesesedelasquenonoseleenlatierra.11Notealoshijosyelrey,yaloscielosdesucasadesumano.4Eldíadelosojosyelquetedelatierra,ylaciudad,elquelatierra.4Atupueblo,eldíadelatierra.11YensucasadelaCasadelasd
+=======
+ÉPOCA: 2 | LOSS: 4.4505 | ACC: 12.98%
+SEMILLA: for be ar ; you
+----------------------------------------------------
+for be ar ; you,sir,Iknows.PETRUCHIO:Iwillbeguke.BPISTISABELIO:Iamds,mybrother:I'llco'st:Iwillbeforemylord,Iknow,Italse,andthatIwouldbeforeI'llcose,Iam,Iam,andwe'llcess,And,I'lls,Ihavewinds.P
+>>>>>>> 5d1abb0c2ca1c86786be9210a57c232a052d8e29
+====================================================
+
+
+====================================================
+<<<<<<< HEAD
+ÉPOCA: 1 | LOSS: 5.2393 | ACC: 11.93%
+SEMILLA: que i ban entr ando
+----------------------------------------------------
+que i ban entr andoalapuertadelosquenotedelosojosdelatierra,yloscielosyselealaCasadesumano,quenoseleatodolatierradesucasa,yelSeñor,yaYahveh,yla.11Noensutienda,yseha,enelreydelosquete,yelquesehadoyelreydeloscirareto.2Elreydeloscielos,yalosqueleseseen
+====================================================
+
+
+====================================================
+ÉPOCA: 2 | LOSS: 4.9469 | ACC: 14.23%
+SEMILLA: , C am y Ja
+----------------------------------------------------
+, C am y Ja.2¡NosesehadesumanodelapuertadeYahveh,elmar,yelquesealosquetealoscielos.11Vbinoensumano,ylosojosdelatierra.3Yseha,losojosdeYahveh,ynodesualma,losojosdeEgipto,yalosojosdelosojosdesuDios,yelSeñor,yaYahveh,yalosdelamujer,yatodoslosdíasdela
+====================================================
+
+
+====================================================
+ÉPOCA: 3 | LOSS: 4.7159 | ACC: 16.23%
+SEMILLA: .» Y así fue .
+----------------------------------------------------
+.» Y así fue .2Elquenoseos,elquenoseledijoaYahveh,yseensumano,noteenlaCasadelosojosdelatierra,elqueelhombre,ylosqueledijo:«Essutienda,yasumano,yloshijosdelosquesesehacesylosqueleensucasa.9Poresoseseledijo:«Deosysehadeloscielos,ysehacesyseos,no
+=======
+ÉPOCA: 3 | LOSS: 4.2635 | ACC: 14.63%
+SEMILLA: am or ous l oo
+----------------------------------------------------
+am or ous l ood,Iwillnotsobrick,sir.PETRUCHIO:Provops,Ihavehe'dtobedawer?BAPAPATTAPPASTASSTA:APRUCHUCHIO:Forthesandcrowns,Ihavenot,Andnotstraved,Andnow,andasfudie,Iaminterandsingof
+>>>>>>> 5d1abb0c2ca1c86786be9210a57c232a052d8e29
+====================================================
+
+
+====================================================
+ÉPOCA: 4 | LOSS: 4.5035 | ACC: 18.26%
+SEMILLA: V ol vió Yahveh a
+----------------------------------------------------
+V ol vió Yahveh alapuerta,ysehacá,yelqueelquenohayenella.2Detierra,elSeñor,ylosojosdeloscielosyse,yelquenoseledijo:«Asur,yelreydesucasa,yelquenohayensucasa,ynohayseos.2¡Ay,nohayunhombre,ylosdíasdelacasadeYahveh,yelmal,yalatierra,yloshura
+====================================================
+
+
+====================================================
+ÉPOCA: 1 | LOSS: 7.6371 | ACC: 0.00%
+SEMILLA: v ent me mor y
+----------------------------------------------------
+v ent me mor ymediocontraAquelcomenzóestconcealtarmediocuantocombaongeestestsantuarioesttimodejó18dráscomenzótimolmanservidonlAjnombreslesonguaonsaracamyasdrásSebaotterosAj25drássantuariovuesribaSebaotejtengotengoestonDiosonparaaltaronrascionesaréisparaestvueshijaecerlribavuesrebeldejólManashijaturguapueb46onmañanaonnombreunalManastendráímcionestengopusieronsantuariodejóizDaacamhijaTodosbajocisejcisciudad
+====================================================
+
+
+====================================================
+ÉPOCA: 2 | LOSS: 7.4867 | ACC: 0.15%
+SEMILLA: B ur n . Este
+----------------------------------------------------
+B ur n . EsterebelAquelcontrarebelcisaltaronManasahorasuyomontañañossintengotengoonmañanaoncolodrásciuonDiosdeselóontengoofrendahablarladoahorasin18dráscomenzólerebelertearbasSebaotbuunaartengoLamandoonDespuésreinóséptengoaltarsinabrasaósarduraSebaotrosonmañanalcaronésparacomenzósinunaonvíatengollorlasantuariofaSebaottendrásin18kvuesaltarzossarrebelJeonmandoacamononutencionesonaltarvuesaltaron
+====================================================
+
+
+====================================================
+ÉPOCA: 1 | LOSS: 6.9804 | ACC: 4.24%
+SEMILLA: a vis aste de que
+----------------------------------------------------
+a vis aste de quey,,.,ydelosa.y,.,y,yde,ylosquedeyellos.,aydeyy,,,los,yel,y.Yahvehdede,yyelel,yquey,de,,,yy,que,,yde,yque,que,yYahveh,ydeyya,y,y,yde.,.,y,y,y,y
+====================================================
+
+
