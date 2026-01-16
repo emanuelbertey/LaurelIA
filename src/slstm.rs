@@ -8,7 +8,7 @@ The sLSTM extends the traditional LSTM by using exponential gating and a new mem
 */
 
 use candle_core::{Tensor, Device, Result, DType};
-use candle_nn::{Dropout, Module, VarBuilder, ops};
+use candle_nn::{Dropout, VarBuilder, ops};
 
 /// State for sLSTM containing cell and hidden states
 #[derive(Clone, Debug)]
@@ -36,6 +36,15 @@ impl SLstmstate {
             normalizer,
             hidden,
             stabilizer,
+        }
+    }
+
+    pub fn detach(&self) -> Self {
+        Self {
+            cell: self.cell.detach(),
+            normalizer: self.normalizer.detach(),
+            hidden: self.hidden.detach(),
+            stabilizer: self.stabilizer.detach(),
         }
     }
 }

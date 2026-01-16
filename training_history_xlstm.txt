@@ -1,0 +1,313 @@
+====================================================
+ÉPOCA: 1 | LOSS: 5.5184 | ACC: 5.39%
+SEMILLA: po or life must ans
+----------------------------------------------------
+po or life must ans,andPTA:TAI:TSTPPPTPP:IPA:TA:A:P:I:BTPPA:PTTIO:H:ITA:SIhave't,andITP:P:STAA:P:I's.PTP:ITPIPRPPIO:IO:IPIO:A:A:PR
+====================================================
+
+
+====================================================
+ÉPOCA: 1 | LOSS: 5.4774 | ACC: 11.81%
+SEMILLA:  humbles him
+----------------------------------------------------
+ humbles him,ĊTo,ĊI:ĊĊThat:ĊThatĊThats,ĠandĊTheo,ĊBTheo.ĊĊNIThee.ĊĊThee.ĊĊIAnd,ĊTo;ĊThee,ĊBTheer.ĊĊI:ĊTh;ĊA:ĊWhe,ĊSTherels,ĊTh;ĊThe,Ġyou
+====================================================
+
+
+====================================================
+ÉPOCA: 1 | LOSS: 4.7148 | ACC: 15.92%
+SEMILLA: ly clergy
+----------------------------------------------------
+ly clergy,
+And heer,
+What,
+He;
+And I will I have
+Be,
+And he in this ma, I'll
+This,
+When,
+And in this
+The senting
+The fidy; and
+So,
+For,
+Ity
+I
+And
+And
+That, sir,
+To,
+In a
+====================================================
+
+
+====================================================
+ÉPOCA: 2 | LOSS: 4.2966 | ACC: 18.86%
+SEMILLA: ,
+And G
+----------------------------------------------------
+,
+And Greted, and hence to the wits.
+
+PRISEIO:
+That,
+And he,
+Whe since I have fids, my lords
+That is a stoined,
+And, I am the bramer.
+
+GONRIO:
+And I have
+A
+TIS:
+
+LEDUKE VINCENTIO:
+I
+SIO:
+====================================================
+
+
+====================================================
+ÉPOCA: 3 | LOSS: 4.0277 | ACC: 20.93%
+SEMILLA:  hire;
+I
+----------------------------------------------------
+ hire;
+I'll have first, I have
+The merming to my bright
+Theret
+PET:
+Thenewed;
+And I have have
+That, thou art not accads;
+Theremin, and duts, and but I'll
+And I will I will not
+The find.
+
+LUCPRIA:
+I'll belt
+
+====================================================
+
+
+====================================================
+ÉPOCA: 4 | LOSS: 3.8439 | ACC: 22.38%
+SEMILLA:  something good
+----------------------------------------------------
+ something good
+And I am a smin.
+
+DRIARWICK:
+And incleep; for accewe,
+Theny, thou denerry,
+And I have falk, sir, I am a matientio;
+And sound, and brawied;
+Away, and I'll bea,
+Shough to be awe's
+====================================================
+
+
+<<<<<<< HEAD
+====================================================
+ÉPOCA: 5 | LOSS: 3.7130 | ACC: 23.45%
+SEMILLA: rer,
+A
+----------------------------------------------------
+rer,
+And silixty.
+
+PRINCENTIO:
+If I am a cuts, I can know it;
+And he is not, I know,
+And I will be foul,
+And in this hory.
+
+HORKALUS:
+That, I'll have mistow
+The chold me the master and in the tazen,
+And I have
+====================================================
+
+
+====================================================
+ÉPOCA: 6 | LOSS: 3.6079 | ACC: 24.43%
+SEMILLA: STA:
+W
+----------------------------------------------------
+STA:
+We, and you have first:
+I will not a covership, if you shall
+I am he is not full of your brother,
+And since and besty.
+
+GRADUS:
+Ay, for the world's a bid
+And I am a false.
+
+PETRUCHIO:
+The mistress and douch of the temn.
+
+H
+====================================================
+
+
+====================================================
+ÉPOCA: 7 | LOSS: 3.5188 | ACC: 25.33%
+SEMILLA:  good my lord;
+
+----------------------------------------------------
+ good my lord;
+And help'd, my lord.
+
+CEONTES:
+I'll craigns to make a craved,
+Who, if though I have not,
+With accason, I am not,
+Away with the master and I'll have first
+Of you, sir, sir, sir,
+But, I am accock,
+With his horse a sorrows,
+====================================================
+
+
+====================================================
+ÉPOCA: 1 | LOSS: 3.4704 | ACC: 25.98%
+SEMILLA:  holy order
+----------------------------------------------------
+ holy order:
+As I have been to the world;
+And then I'll do chall in this fellow,
+Why, thou art a creathey,
+And so much, my body and
+theded, sir, I'll tell you to belazed
+The temns, I'll hearing.
+
+PETRUCHIO:
+And I, I will not be so, and
+====================================================
+
+
+====================================================
+ÉPOCA: 1 | LOSS: 3.4119 | ACC: 26.76%
+SEMILLA:  I will raise her
+----------------------------------------------------
+ I will raise her,
+The singhile, and he hath while
+I will make a cause to change,
+And if thou but bid you shall not to cairth
+The doubby, sir, thou art a
+thee'st, sir, I know, I will,
+And biding young and duty and
+To be a slects, thou art,
+I
+====================================================
+
+
+=======
+>>>>>>> 5d1abb0c2ca1c86786be9210a57c232a052d8e29
+====================================================
+ÉPOCA: 1 | LOSS: 3.3589 | ACC: 27.49%
+SEMILLA: ve send her
+
+----------------------------------------------------
+ve send her
+Doved to her, if I'll dost thou art, and heard;
+And then hence, and my full of the kingdio.
+
+Servant:
+If thou art a puty to the babely
+To the gator, I have been duse.
+
+PETRUCHIO:
+If, I'll do not so creatred, I'll not,
+For I have
+====================================================
+
+
+====================================================
+ÉPOCA: 1 | LOSS: 3.4074 | ACC: 26.62%
+SEMILLA: el down in merc
+----------------------------------------------------
+el down in mercy.
+
+CLORTENS:
+I'll tell him to could not, if he says,
+The dipeny; but he hath wants!
+
+PETSIO:
+Why, thou art not to have thee;
+That she'st, if thou art not a cailous hither,
+And if she's sea
+Thy sicked, sir, if you have not
+====================================================
+
+
+====================================================
+ÉPOCA: 2 | LOSS: 3.2706 | ACC: 28.30%
+SEMILLA: 
+May give you
+----------------------------------------------------
+
+May give you, I will not traines to the since
+And seast me with the pursenty.
+
+GRUMIO:
+She is no hunde; help me, I may come
+And since and I'll not be contented
+As she's besty, and youngland
+Then, for the withe, I'll see
+to her, sir, sir
+====================================================
+
+
+====================================================
+ÉPOCA: 3 | LOSS: 3.1922 | ACC: 29.33%
+SEMILLA:  Mantua,
+----------------------------------------------------
+ Mantua,
+And I do not be a mistress; for
+Where you have not so longs you are
+In humbe's brust, I'll have you.
+
+PETRUCHIO:
+What is no more; he hath woo her!
+
+PETRUCHIO:
+I will I will
+weet Lucentio; I have been
+thest thou withe, I will instin
+====================================================
+
+
+====================================================
+ÉPOCA: 4 | LOSS: 3.1212 | ACC: 30.33%
+SEMILLA:  at the Tower and
+----------------------------------------------------
+ at the Tower and
+well: I'll because to be so,
+I will be so, and I'll not proce,
+What say you are bribed according:
+What if the treafect younger,
+Which he shall not do young, if you shall
+I do fooling, sir: I have done,
+And hence and strange, I have
+To tach
+====================================================
+
+
+-> Batch [141/373] Loss: 6.9043 Acc: 2.70%
+-> Batch [311/373] Loss: 6.4847 Acc: 3.84%
+-> Batch [381/420] Loss: 5.6799 Acc: 5.67%
+-> Batch [211/420] Loss: 5.4186 Acc: 6.82%
+-> Batch [221/420] Loss: 5.2984 Acc: 7.66%
+-> Batch [411/420] Loss: 5.1872 Acc: 8.26%
+-> Batch [1/420] Loss: 5.2845 Acc: 7.81%
+-> Batch [21/420] Loss: 5.1579 Acc: 7.81%
+-> Batch [41/420] Loss: 5.0605 Acc: 9.37%
+-> Batch [121/420] Loss: 5.0619 Acc: 9.44%
+-> Batch [121/420] Loss: 4.9850 Acc: 9.93%%
+-> Batch [291/420] Loss: 4.9107 Acc: 10.08%
+-> Batch [241/420] Loss: 4.8242 Acc: 10.92%
+-> Batch [111/420] Loss: 4.7619 Acc: 11.33%
+-> Batch [111/420] Loss: 4.7358 Acc: 11.64%

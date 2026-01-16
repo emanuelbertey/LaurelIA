@@ -51,7 +51,7 @@ mod mlstm;
 mod model;
 mod slstm;
 
-pub use block::{BlockType, XLstmblock, XLstmblockConfig};
+pub use block::{BlockType, XLstmblock, XLstmblockConfig, LSTMState};
 pub use gate_controller::GateController;
 pub use mlstm::{MLstm, MLstmcell, MLstmconfig, MLstmstate};
 pub use model::{LstmType, XLstm, XLstmconfig};

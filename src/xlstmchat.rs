@@ -278,12 +278,17 @@ fn generate_text(
         )?;
 
         let (output, next_state) = model.forward(&input, current_state)?;
-        current_state = Some(next_state);
+        current_state = Some(next_state.into_iter().map(|s| s.map(|state| state.detach())).collect());
+        //current_state = Some(next_state);
 
         let (_b, _l, _v) = output.dims3()?;
         // Extract last step logits
+       
         let last_logits = output.narrow(1, seq_len - 1, 1)?
-            .squeeze(1)?; // [1, vocab_size]
+        .squeeze(1)?
+        .detach();
+        //let last_logits = output.narrow(1, seq_len - 1, 1)?
+           // .squeeze(1)?; // [1, vocab_size]
 
         let next_token = sample_from_logits(&last_logits, 0.8)?;
 
@@ -467,9 +472,9 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
         }
         drop(data); // release lock before training
 
-        let mut optim_slstm = AdamW::new(slstm_params, ParamsAdamW { lr: 3e-4, ..Default::default() })?;
-        let mut optim_mlstm = AdamW::new(mlstm_params, ParamsAdamW { lr: 3e-5, ..Default::default() })?;
-        let mut optim_other = AdamW::new(other_params, ParamsAdamW { lr: 3e-4, ..Default::default() })?;
+        let mut optim_slstm = AdamW::new(slstm_params, ParamsAdamW { lr: 1e-5, ..Default::default() })?;
+        let mut optim_mlstm = AdamW::new(mlstm_params, ParamsAdamW { lr: 1e-6, ..Default::default() })?;
+        let mut optim_other = AdamW::new(other_params, ParamsAdamW { lr: 1e-5, ..Default::default() })?;
 
         println!("Iniciando entrenamiento...\n");
 
@@ -480,8 +485,9 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
             let mut num_losses = 0;
             let mut correct = 0;
             let mut total = 0;
-
+            let mut current_state = None;
             for batch_idx in 0..num_batches {
+                
                 let current_batch_start_seq = batch_idx * batch_size;
                 let current_batch_size = (batch_size).min(num_actual_sequences - current_batch_start_seq);
 
@@ -497,7 +503,18 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
                     &device,
                 )?;
 
-                let (logits, _) = model.forward(&input_batch, None)?;
+                if batch_idx == 0 {
+                // Hacemos un forward silencioso para llenar las matrices del mLSTM
+                let (_, warm_state) = model.forward(&input_batch, None)?;
+                current_state = Some(warm_state.into_iter().map(|s| s.map(|state| state.detach())).collect());
+                println!("> Estado inicializado con éxito en el Batch 0");
+            }
+
+               // let (logits, _) = model.forward(&input_batch, None)?;
+                let (logits, next_state) = model.forward(&input_batch, current_state)?;
+                current_state = Some(next_state.into_iter().map(|s| s.map(|state| state.detach())).collect());
+                //current_state = Some(next_state);
+
 
                 // Optimization
                 let logits_flat = logits.reshape((current_batch_size * seq_length, vocab_size))?;

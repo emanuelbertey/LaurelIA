@@ -110,6 +110,15 @@ pub enum LSTMState {
     MLSTM(Vec<MLstmstate>),
 }
 
+impl LSTMState {
+    pub fn detach(&self) -> Self {
+        match self {
+            LSTMState::SLSTM(v) => LSTMState::SLSTM(v.iter().map(|s| s.detach()).collect()),
+            LSTMState::MLSTM(v) => LSTMState::MLSTM(v.iter().map(|m| m.detach()).collect()),
+        }
+    }
+}
+
 /// xLSTM block combining LSTM with normalization and projections
 #[derive(Debug)]
 pub struct XLstmblock {
@@ -152,9 +161,8 @@ impl XLstmblock {
                 (out, Some(LSTMState::MLSTM(state)))
             }
 
-            // Caso de error: El tipo de estado no coincide con el tipo de bloque
             _ => {
-                return candle_core::bail!("Mismatched state and LSTM variant in XLstmblock");
+                candle_core::bail!("Mismatched state and LSTM variant in XLstmblock");
             }
         };
 
@@ -181,5 +189,46 @@ impl XLstmblock {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_core::{Device, Tensor, DType};
+    use crate::{SLstmstate, MLstmstate};
 
+    #[test]
+    fn test_lstm_state_detach() -> candle_core::Result<()> {
+        let device = Device::Cpu;
+        
+        // Test SLSTM detach
+        let s_state = SLstmstate::new(
+            Tensor::zeros((1, 10), DType::F32, &device)?,
+            Tensor::zeros((1, 10), DType::F32, &device)?,
+            Tensor::zeros((1, 10), DType::F32, &device)?,
+            Tensor::zeros((1, 10), DType::F32, &device)?,
+        );
+        let lstm_state = LSTMState::SLSTM(vec![s_state]);
+        let detached = lstm_state.detach();
+        if let LSTMState::SLSTM(states) = detached {
+             assert_eq!(states.len(), 1);
+        } else {
+             panic!("Wrong variant");
+        }
 
+        // Test MLSTM detach
+        let m_state = MLstmstate::new(
+             Tensor::zeros((1, 4, 16, 16), DType::F32, &device)?,
+             Tensor::zeros((1, 10), DType::F32, &device)?,
+             Tensor::zeros((1, 4, 16), DType::F32, &device)?,
+             Tensor::zeros((1, 4, 1), DType::F32, &device)?,
+        );
+        let lstm_state_m = LSTMState::MLSTM(vec![m_state]);
+        let detached_m = lstm_state_m.detach();
+        if let LSTMState::MLSTM(states) = detached_m {
+             assert_eq!(states.len(), 1);
+        } else {
+             panic!("Wrong variant");
+        }
+        
+        Ok(())
+    }
+}

@@ -39,6 +39,15 @@ impl MLstmstate {
             max_gate_log,
         }
     }
+
+    pub fn detach(&self) -> Self {
+        Self {
+            cell: self.cell.detach(),
+            hidden: self.hidden.detach(),
+            normalizer: self.normalizer.detach(),
+            max_gate_log: self.max_gate_log.detach(),
+        }
+    }
 }
 
 /// Configuration for mLSTM
@@ -143,7 +152,7 @@ impl MLstm {
 
             // Inter-layer Dropout
             layer_input = if layer_idx < self.num_layers - 1 && self.dropout > 0.0 {
-                self.dropout_layer.forward(&h_seq, true)?
+                self.dropout_layer.forward(&h_seq, false)?
             } else {
                 h_seq
             };
@@ -176,8 +185,10 @@ pub struct MLstmcell {
     pub weight_ih: Tensor,
     /// Weight matrix for hidden to gates
     pub weight_hh: Tensor,
-    /// Bias for gates
+    /// Bias for gates (trainable base)
     pub bias: Tensor,
+    /// Fixed bias offset to match Burn implementation (e.g. forget gate bias 0.5)
+    pub bias_offset: Tensor,
     /// Query projection
     pub w_q: Linear,
     /// Key projection
@@ -214,15 +225,20 @@ impl MLstmcell {
             candle_nn::init::DEFAULT_KAIMING_NORMAL
         )?;
 
-        // Bias init logic: Input=0, Forget=0.5.
-        // Candle's VarBuilder doesn't easily set arbitrary initial values unless loading from file.
-        // We will use 0.0 for now, as suggested for "Candle-way" simplicity.
-        // If we really need 0.5 for forget gate, we would need to load a tensor.
         let bias = vb.get_with_hints(
-             3 * hidden_size, 
-             "bias",
-             candle_nn::init::Init::Const(0.0) 
+            3 * hidden_size, 
+            "bias", 
+            candle_nn::init::Init::Const(0.0)
         )?;
+
+        // Bias offset to replicate Burn's manual initialization:
+        // forget gate bias = 0.5, others = 0.0
+        let device = vb.device();
+        let mut b_offset_vals = vec![0.0f32; 3 * hidden_size];
+        for i in hidden_size..(2 * hidden_size) {
+            b_offset_vals[i] = 0.5;
+        }
+        let bias_offset = Tensor::from_vec(b_offset_vals, (3 * hidden_size,), device)?;
 
         let head_dim = hidden_size / num_heads;
 
@@ -237,6 +253,7 @@ impl MLstmcell {
             weight_ih,
             weight_hh,
             bias,
+            bias_offset,
             w_q,
             w_k,
             w_v,
@@ -287,19 +304,24 @@ impl MLstmcell {
         let weight_ih_t = self.weight_ih.t()?.contiguous()?;
         let gates_flat = input_flat.matmul(&weight_ih_t)?;
         let gates = gates_flat.reshape((batch_size, seq_len, 3 * self.hidden_size))?
-            .broadcast_add(&self.bias.reshape((1, 1, 3 * self.hidden_size))?)?;
+            .broadcast_add(&self.bias.reshape((1, 1, 3 * self.hidden_size))?)?
+            .broadcast_add(&self.bias_offset.reshape((1, 1, 3 * self.hidden_size))?)?;
         
         let chunks = gates.chunk(3, 2)?; // Chunk on last dim (dim 2)
         
         let i_log = chunks[0].clone()
             .reshape((batch_size, seq_len, self.num_heads, head_dim))?
-            .permute((0, 2, 1, 3))? // [B, H, S, D_h]
+            .permute((0, 2, 1, 3))?
             .clamp(-6.0, 6.0)?;
+
         let f_log = chunks[1].clone()
             .reshape((batch_size, seq_len, self.num_heads, head_dim))?
             .permute((0, 2, 1, 3))?
             .clamp(-6.0, 6.0)?;
-        let o = ops::sigmoid(&chunks[2])?; // [B, S, D_hidden]
+        let f_log = f_log.affine(1.0, 1.0)?;
+
+        let o_pre = chunks[2].clone();
+        let o = ops::sigmoid(&o_pre)?; // [B, S, D_hidden]
 
         let i_log_m = i_log.mean(3)?; // [B, H, S] (keep dim? Burn mean_dim keeps dim? No, usually reduces. Need to check strictly)
         // Burn: mean_dim(3) returns [B, H, S, 1]. Candle mean returns reduced. We need unsqueeze.
@@ -406,15 +428,8 @@ impl MLstmcell {
             .broadcast_as((batch_size, self.num_heads, seq_len, head_dim))?;
         let n_initial = n_initial_base.broadcast_mul(&initial_scale)?;
         
-       // let n_heads = (n_parallel + n_initial)?.clamp(1e-6, f32::MAX)?; // clamp_min
-
-        // MHLN
-        //let h_normalized = (h_heads / (n_heads.clone() + 1e-5)?)?; 
-       
-       
-       
-       let n_heads = (n_parallel + n_initial)?.clamp(1.0, f32::MAX)?; 
-       let h_normalized = (h_heads / n_heads.clone())?; // <--- Añade .clone() aquí
+        let n_heads = (n_parallel + n_initial)?.clamp(1e-6, f32::MAX)?; 
+        let h_normalized = (h_heads / n_heads.clone())?;
 
         // Layernorm expects [B, S, D] or similar last dim.
         // h_normalized: [B, H, S, D_h].
