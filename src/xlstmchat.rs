@@ -8,17 +8,18 @@ using a simple character-level tokenizer that can be saved/loaded as JSON.
 
 */
 
-use candle_core::{Device, Tensor, Module, DType};
-use candle_nn::{VarBuilder, VarMap, Optimizer, AdamW, ParamsAdamW, ops::softmax};
-use anyhow::{Result, Context};
+use candle_core::{Device, Tensor, DType};
+use candle_nn::{VarBuilder, VarMap, Optimizer, AdamW, ParamsAdamW};
+use anyhow::Result;
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
+use std::collections::HashSet;
 
 use tokenizers::models::bpe::{BpeTrainerBuilder, BPE};
-use tokenizers::pre_tokenizers::whitespace::Whitespace;
 use tokenizers::tokenizer::Tokenizer as HFTokenizer;
 use tokenizers::models::TrainerWrapper;
+use tokenizers::pre_tokenizers::metaspace::{Metaspace, PrependScheme};
 
 use xlstm::{LstmType, XLstm, XLstmconfig, BlockType};
 use rand::Rng;
@@ -29,27 +30,37 @@ pub struct Tokenizer {
 }
 
 impl Tokenizer {
-    /// Crea un nuevo tokenizador BPE entrenado desde un texto
     pub fn from_text(text: &str, vocab_size: usize) -> Result<Self> {
-        let mut tokenizer = HFTokenizer::new(BPE::default());
-        
-        // Usar pre-tokenizador de espacios en blanco
-        tokenizer.with_pre_tokenizer(Some(Whitespace::default()));
+        let model = BPE::builder()
+            .byte_fallback(true)
+            .build()
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        let mut tokenizer = HFTokenizer::new(model);
+
+        tokenizer.with_pre_tokenizer(Some(Metaspace::new(
+            ' ',
+            PrependScheme::Always,
+            true,
+        )));
+
+        let mut alphabet = HashSet::new();
+        alphabet.insert('\n');
+        alphabet.insert(' ');
 
         let trainer = BpeTrainerBuilder::default()
             .show_progress(true)
             .vocab_size(vocab_size)
-            .min_frequency(2)
+            .min_frequency(0)
+            .initial_alphabet(alphabet)
             .build();
 
-        // Envolver el entrenador de manera genérica usando el trait From
         let mut trainer_wrapper = TrainerWrapper::from(trainer);
 
-        // Entrenar desde el archivo temporal
         let temp_file = "temp_train.txt";
         fs::write(temp_file, text)?;
         tokenizer.train_from_files(&mut trainer_wrapper, vec![temp_file.to_string()])
-            .map_err(|e| anyhow::anyhow!("Error en entrenamiento: {}", e))?;
+            .map_err(|e| anyhow::anyhow!(e))?;
         fs::remove_file(temp_file)?;
 
         Ok(Self { tokenizer })
@@ -318,6 +329,28 @@ fn main() -> Result<()> {
         tokenizer
     };
 
+println!("\n--- VERIFICACIÓN DE IDENTIDAD DE TOKENS ---");
+let texto_verificacion = " \n"; // Un espacio y un salto de línea
+let ids = tokenizer.encode(texto_verificacion);
+
+for id in ids {
+    let contenido = tokenizer.decode(&[id]);
+    // Esto te dirá exactamente qué ID tiene el espacio y cuál el salto
+    if contenido.contains(' ') {
+        println!("ID: {:<5} | Representa: [ESPACIO SEGURO]", id);
+    } else if contenido.contains('\n') {
+        println!("ID: {:<5} | Representa: [SALTO DE LINEA SEGURO]", id);
+    } else {
+        println!("ID: {:<5} | Representa: '{}'", id, contenido);
+    }
+}
+println!("-------------------------------------------\n");
+
+let prueba = tokenizer.encode(" ");
+println!("DEBUG ESPACIO: {:?}", prueba);
+
+let prueba_salto = tokenizer.encode("\n");
+println!("DEBUG SALTO: {:?}", prueba_salto);
     println!("Tamaño del vocabulario: {}\n", tokenizer.vocab_size());
 
     println!("Cargando texto de entrenamiento...");

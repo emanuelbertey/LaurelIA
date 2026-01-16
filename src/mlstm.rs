@@ -450,12 +450,24 @@ impl MLstmcell {
         let final_cell_update = v_weighted_t.matmul(&k.contiguous()?)?; // [B, H, D, D] 
 
         let mut final_cell = (final_cell_initial + final_cell_update)?; 
- 
-         // Estabilización (Soft norm) - REMOVIDO PARA EVITAR CPU SYNC
-         // El escalado condicional con to_scalar() detiene la GPU. 
-         // Confiamos en la estabilización logarítmica (m_t) de xLSTM.
-         // Si es necesario, se puede usar un clamp fijo.
-         // final_cell = final_cell.clamp(-20.0, 20.0)?; 
+
+        // Soft-normalización dinámica de la matriz de memoria (equivalente a la versión Burn)
+        // Calculamos |C|_max en todas las dimensiones y aplicamos:
+        // scale = 10 / (10 + |C|_max)
+        // final_cell = final_cell * scale
+        let abs_cell = final_cell.abs()?;
+        let c_max1 = abs_cell.max(3)?; 
+        let c_max2 = c_max1.max(2)?;   
+        let c_max3 = c_max2.max(1)?;   
+        let c_abs_max = c_max3.max(0)?; 
+
+        let ten = Tensor::new(10.0f32, device)?;
+        let denom = ten.broadcast_add(&c_abs_max)?; 
+        let scale_scalar = (&ten / &denom)?; 
+        let scale_factor = scale_scalar
+            .reshape((1, 1, 1, 1))?
+            .broadcast_as(final_cell.shape())?;
+        final_cell = (final_cell * &scale_factor)?; 
  
          let final_hidden = h_seq.narrow(1, last_idx, 1)?.reshape((batch_size, self.hidden_size))?; 
  
