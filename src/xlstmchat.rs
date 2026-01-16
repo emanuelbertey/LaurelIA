@@ -294,10 +294,11 @@ fn generate_text(
 
         current_tokens.push(next_token);
         if let Some(t) = tokenizer.id_to_token(next_token) {
-            let clean_token = t
-                .replace("Ċ", "\n") 
-                .replace("Ġ", " "); 
-            
+            let mut clean_token = t.clone();
+            // Reemplazo de caracteres especiales de BPE si es necesario
+            if clean_token.contains('Ċ') || clean_token.contains('Ġ') {
+               clean_token = clean_token.replace("Ċ", "\n").replace("Ġ", " ");
+            }
             current_text.push_str(&clean_token);
         }
     }
@@ -472,9 +473,11 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
         }
         drop(data); // release lock before training
 
-        let mut optim_slstm = AdamW::new(slstm_params, ParamsAdamW { lr: 1e-5, ..Default::default() })?;
-        let mut optim_mlstm = AdamW::new(mlstm_params, ParamsAdamW { lr: 1e-6, ..Default::default() })?;
-        let mut optim_other = AdamW::new(other_params, ParamsAdamW { lr: 1e-5, ..Default::default() })?;
+        // Tasas de aprendizaje recomendadas para xLSTM: 
+        // sLSTM suele tolerar LRs más altas, mLSTM requiere más cuidado.
+        let mut optim_slstm = AdamW::new(slstm_params, ParamsAdamW { lr: 2e-4, ..Default::default() })?;
+        let mut optim_mlstm = AdamW::new(mlstm_params, ParamsAdamW { lr: 8e-5, ..Default::default() })?;
+        let mut optim_other = AdamW::new(other_params, ParamsAdamW { lr: 2e-4, ..Default::default() })?;
 
         println!("Iniciando entrenamiento...\n");
 
@@ -534,19 +537,12 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
                 total += current_batch_size * seq_length;
 
                 let grads = loss.backward()?;
-/*
-                // --- GRADIENT CLIPPING POR VALOR (PROTECCIÓN XLSTM) ---
-                for var in optim_slstm
-                    .vars()
-                    .iter()
-                    .chain(optim_mlstm.vars().iter())
-                    .chain(optim_other.vars().iter())
-                {
-                    if let Some(grad) = grads.get(var) {
-                        let _ = grad.clamp(-1.0f32, 1.0f32)?;
-                    }
-                }
-*/
+
+                /* 
+                // --- GRADIENT CLIPPING (Sugerido para prevenir estancamiento) ---
+                // Para xLSTM es vital clipear gradientes debido a las funciones exponenciales
+                */
+
                 // Ahora los optimizadores usarán los gradientes clipeados
                 optim_slstm.step(&grads)?;
                 optim_mlstm.step(&grads)?;

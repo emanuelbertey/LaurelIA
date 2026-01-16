@@ -197,16 +197,11 @@ pub struct SLstmcell {
 }
 
 impl SLstmcell {
-    /// Create a new sLSTM cell
     pub fn new(
         input_size: usize,
         hidden_size: usize,
-        vb: VarBuilder, // Use VarBuilder for initialization
+        vb: VarBuilder, 
     ) -> Result<Self> {
-        // 4 gates: input, forget, cell, output
-        
-        // Init weights with Xavier Normal equivalent or similar. 
-        // Candle's default init for linear is usually adequate, but we can customize.
         let weight_ih = vb.get_with_hints(
             (4 * hidden_size, input_size), 
             "weight_ih", 
@@ -219,57 +214,12 @@ impl SLstmcell {
             candle_nn::init::DEFAULT_KAIMING_NORMAL
         )?;
 
-        // Initialize biases with specific values for stability
-        // Forget gate bias initialized to 0.0 or something else if needed?
-        // Original code: -2.0 for everything? 
-        // Original: first hidden_size = -2.0 (input gate?), next hidden_size -> 2*hidden_size = -2.0
-        // Wait, loop 0..hidden_size and hidden_size..2*hidden_size = -2.0. Others (2*h..4*h) are 0.0.
-        
-        let _bias_vals = {
-            let mut data = vec![0.0f32; 4 * hidden_size];
-            // Input gate bias?
-            for item in data.iter_mut().take(hidden_size) {
-                *item = -2.0; // "Input gate bias"? Original code comments are a bit sparse on mapping indices to gates
-                // chunks[0] is i_gate.
-            }
-            // Forget gate bias? chunks[1] is f_gate.
-            for item in data.iter_mut().take(2 * hidden_size).skip(hidden_size) {
-                *item = -2.0; 
-            }
-            // Cell (g) and Output (o) remain 0.0
-            data
-        };
-        
         let bias = vb.get_with_hints(
             4 * hidden_size, 
             "bias", 
-            candle_nn::init::Init::Const(0.0) // We'll override or use a custom init, but explicit set is better
+            candle_nn::init::Init::Const(0.0)
         )?;
-        // Ideally we set the values. VarBuilder usually loads or inits. 
-        // Let's force load from literal if we are creating from scratch or assume trained weights will handle it.
-        // For now, let's just init as zeros then add constant? No, `vb` handles parameters. 
-        // If we are strictly porting "init", we should rely on vb to find pretrained weights OR init with specific distribution.
-        // But `vb` is lazy. 
-        // Let's stick to standard initialization for now, unless we can pass a specific init.
-        // Since I cannot easily inject custom values into a VarBuilder (it pulls from file or random),
-        // I will assume for now that standard init is fine, or I'd need to manually create the tensor.
-        // Note: The user might be training from scratch. 
-        // Modification: If `vb` has no data, we might want to manually create tensors, but `vb` is the standard way.
-        // Use `vb.get((...))` returns a tensor.
-        
-        // HACK: To replicate the specific bias init, we strictly should modify it.
-        // But `vb` returns a generic tensor.
-        // If the user wants specific init, we usually do it via the Init enum.
-        // Candle `Init` doesn't support "partial fill". 
-        // I will just use `zeros` for bias for now to keep it compilable, noting the difference.
-        // Or better:
-        // let bias = Tensor::from_vec(bias_vals, 4*hidden_size, vb.device())?;
-        // But we want it to be a Var (trainable).
-        // Let's trust the optimizer or user to load weights. If new, maybe I should do:
-        // let bias = vb.get_with_hints(..., Init::FromVec(bias_vals))? ? No FromVec.
-        
-        // I will leave it as standard init (Zeros or Rand) for now. The specific bias values are for training stability.
-        
+
         Ok(Self {
             weight_ih,
             weight_hh,
@@ -294,19 +244,20 @@ impl SLstmcell {
 
         // Compute all gates: i, f, g, o
         // weight_ih: [4*H, I]. input: [B, I]. 
-        // input @ weight_ih^T = [B, 4*H]
         let gates = input.matmul(&self.weight_ih.t()?)?
             .broadcast_add(&self.bias.unsqueeze(0)?)?
             .broadcast_add(&hidden.matmul(&self.weight_hh.t()?)?)?;
 
         let chunks = gates.chunk(4, 1)?;
+        // Según xLSTM paper: i, f son exponenciales, g es tanh, o es sigmoid
+        // Aplicamos estabilización para evitar overflow
         let i_gate = &chunks[0];
         let f_gate = &chunks[1];
         let g_gate = &chunks[2];
         let o_gate = &chunks[3];
 
         let m_prev_plus_f = stabilizer.add(f_gate)?;
-        let m_new = m_prev_plus_f.maximum(i_gate)?; // max_pair equivalent? candle has maximum
+        let m_new = m_prev_plus_f.maximum(i_gate)?; 
 
         let i_exp = (i_gate - &m_new)?.clamp(-20.0, 0.0)?.exp()?;
         let f_exp = (m_prev_plus_f - &m_new)?.clamp(-20.0, 0.0)?.exp()?;
@@ -317,7 +268,7 @@ impl SLstmcell {
         let c_new = ((&f_exp * cell)? + (&i_exp * g)?)?;
         let n_new = ((f_exp * normalizer)? + i_exp)?;
 
-        let n_safe = n_new.clamp(1e-6, f32::MAX)?; // clamp_min
+        let n_safe = n_new.clamp(1e-6, f32::MAX)?; 
         let h_new = (o * (c_new.clone() / n_safe)?.tanh()?)?;
 
         let new_state = SLstmstate::new(c_new, n_new, h_new.clone(), m_new);

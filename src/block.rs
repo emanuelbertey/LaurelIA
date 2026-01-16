@@ -64,6 +64,8 @@ impl XLstmblockConfig {
 
     /// Initialize a new xLSTM block
     pub fn init(&self, vb: VarBuilder) -> Result<XLstmblock> {
+        let norm = layer_norm(self.input_size, 1e-5, vb.pp("norm"))?;
+        
         let lstm = match self.block_type {
             BlockType::SLSTM => {
                 let lstm_config = SLstmconfig::new(self.input_size, self.hidden_size, self.num_layers)
@@ -79,7 +81,6 @@ impl XLstmblockConfig {
             }
         };
 
-        let norm = layer_norm(self.hidden_size, 1e-5, vb.pp("norm"))?;
         let proj = linear(self.hidden_size, self.input_size, vb.pp("proj"))?;
         let dropout = Dropout::new(self.dropout);
 
@@ -139,25 +140,27 @@ impl XLstmblock {
         input_seq: &Tensor,
         state: Option<LSTMState>,
     ) -> Result<(Tensor, Option<LSTMState>)> {
-        // Realizamos el match de forma más estricta para asegurar compatibilidad de tipos
+        // PRE-NORM: Aplicamos LN al input antes de entrar a la capa LSTM
+        let norm_input = self.norm.forward(input_seq)?;
+
         let (lstm_output, new_state) = match (&self.lstm, state) {
             // Caso sLSTM
             (LSTMVariant::SLSTM(lstm), Some(LSTMState::SLSTM(s))) => {
-                let (out, state) = lstm.forward(input_seq, Some(s))?;
+                let (out, state) = lstm.forward(&norm_input, Some(s))?;
                 (out, Some(LSTMState::SLSTM(state)))
             }
             (LSTMVariant::SLSTM(lstm), None) => {
-                let (out, state) = lstm.forward(input_seq, None)?;
+                let (out, state) = lstm.forward(&norm_input, None)?;
                 (out, Some(LSTMState::SLSTM(state)))
             }
             
             // Caso mLSTM
             (LSTMVariant::MLSTM(lstm), Some(LSTMState::MLSTM(s))) => {
-                let (out, state) = lstm.forward(input_seq, Some(s))?;
+                let (out, state) = lstm.forward(&norm_input, Some(s))?;
                 (out, Some(LSTMState::MLSTM(state)))
             }
             (LSTMVariant::MLSTM(lstm), None) => {
-                let (out, state) = lstm.forward(input_seq, None)?;
+                let (out, state) = lstm.forward(&norm_input, None)?;
                 (out, Some(LSTMState::MLSTM(state)))
             }
 
@@ -166,15 +169,13 @@ impl XLstmblock {
             }
         };
 
-        // Apply normalization BEFORE activation
-        let output = self.norm.forward(&lstm_output)?;
-        // Apply activation
-        let output = output.gelu()?;
-        // Apply projection
+        // Activación GELU (común en xLSTM blocks para mayor no-linealidad)
+        let output = lstm_output.gelu()?;
+        // Proyección de vuelta al tamaño del input residual
         let output = self.proj.forward(&output)?;
-        // Apply dropout
+        // Dropout
         let output = self.dropout.forward(&output, true)?;
-        // Residual connection
+        // RESIDUAL CONNECTION
         let output = (output + input_seq)?;
 
         Ok((output, new_state))

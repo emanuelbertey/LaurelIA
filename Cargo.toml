@@ -2,7 +2,7 @@
 name = "xlstm-rs"
 version = "0.1.0"
 edition = "2024"
-description = "xLSTM: Extended Long Short-Term Memory implementation in Rust using Burn"
+description = "Laurelia: xLSTM Chatbot implementation in Rust using Candle"
 
 
 [dependencies]

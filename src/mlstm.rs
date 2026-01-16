@@ -466,26 +466,23 @@ impl MLstmcell {
 
         let mut final_cell = (final_cell_initial + final_cell_update)?; 
 
-        // Soft-normalización dinámica de la matriz de memoria (equivalente a la versión Burn)
-        // Calculamos |C|_max en todas las dimensiones y aplicamos:
-        // scale = 10 / (10 + |C|_max)
-        // final_cell = final_cell * scale
+        // Soft-normalización dinámica de la matriz de memoria (local por cabeza y muestra)
+        // Calculamos |C|_max por cada (batch, head) y aplicamos la escala localmente.
         let abs_cell = final_cell.abs()?;
-        let c_max1 = abs_cell.max(3)?; 
-        let c_max2 = c_max1.max(2)?;   
-        let c_max3 = c_max2.max(1)?;   
-        let c_abs_max = c_max3.max(0)?; 
-
+        let c_max_cols = abs_cell.max(3)?; // Max across head_dim_2 -> [B, H, D]
+        let c_max_rows = c_max_cols.max(2)?; // Max across head_dim_1 -> [B, H]
+        
         let ten = Tensor::new(10.0f32, device)?;
-        let denom = ten.broadcast_add(&c_abs_max)?; 
-        let scale_scalar = (&ten / &denom)?; 
-        let scale_factor = scale_scalar
-            .reshape((1, 1, 1, 1))?
-            .broadcast_as(final_cell.shape())?;
-        final_cell = (final_cell * &scale_factor)?; 
+        let denom = c_max_rows.broadcast_add(&ten)?; 
+        let scale_factor = ten.broadcast_div(&denom)?;
+        
+        // Redimensionar scale_factor de [B, H] a [B, H, 1, 1] para el matmul estable
+        let scale_factor = scale_factor.unsqueeze(2)?.unsqueeze(3)?;
+        
+        final_cell = final_cell.broadcast_mul(&scale_factor)?;
  
-         let final_hidden = h_seq.narrow(1, last_idx, 1)?.reshape((batch_size, self.hidden_size))?; 
+        let final_hidden = h_seq.narrow(1, last_idx, 1)?.reshape((batch_size, self.hidden_size))?; 
  
-         Ok((h_seq, MLstmstate::new(final_cell, final_hidden, final_norm, final_m)))
+        Ok((h_seq, MLstmstate::new(final_cell, final_hidden, final_norm, final_m)))
     }
 }
