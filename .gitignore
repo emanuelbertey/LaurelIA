@@ -2,3 +2,4 @@
 *.exe
 /model
 *.png
+/model_old

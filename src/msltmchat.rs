@@ -322,7 +322,7 @@ fn main() -> Result<()> {
     let tokenizer_path = "tokenizer_mlstm.json";
     let model_path = "xlstm_chat_model_mlstm.safetensors";
 
-    let target_vocab_size = 1024;
+    let target_vocab_size = 2048;
 
     let tokenizer = if Path::new(tokenizer_path).exists() {
         println!("Cargando tokenizador existente...");
@@ -365,7 +365,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
     println!("Tokens totales: {}\n", tokens.len());
 
     let vocab_size = tokenizer.vocab_size();
-    let hidden_size = 1024; 
+    let hidden_size = 512; 
     let num_layers = 1;
     let num_blocks = 1;
     let output_size = vocab_size; 
@@ -472,6 +472,9 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
             } else { other_params.push(var.clone()); }
         }
         drop(data); // release lock before training
+
+
+        model.print_architecture();
 
         // Tasas de aprendizaje recomendadas para xLSTM: 
         // sLSTM suele tolerar LRs más altas, mLSTM requiere más cuidado.

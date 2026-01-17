@@ -238,7 +238,7 @@ impl XLstm {
         // Apply input projection if present
         if let Some((linear, norm, dropout)) = &self.input_projection {
             x = linear.forward(&x)?;
-            x = norm.forward(&x)?;
+           // x = norm.forward(&x)?;
             x = x.gelu()?;
            // x = dropout.forward(&x, true)?;
         }
