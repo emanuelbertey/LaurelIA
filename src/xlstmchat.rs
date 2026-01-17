@@ -482,6 +482,8 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
         println!("Iniciando entrenamiento...\n");
 
         let num_batches = num_actual_sequences.div_ceil(batch_size);
+        
+        model.print_architecture();
 
         for epoch in 0..num_epochs {
             let mut total_loss = 0.0f32;

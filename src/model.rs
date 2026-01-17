@@ -240,7 +240,7 @@ impl XLstm {
             x = linear.forward(&x)?;
             x = norm.forward(&x)?;
             x = x.gelu()?;
-            x = dropout.forward(&x, true)?;
+           // x = dropout.forward(&x, true)?;
         }
 
         // Initialize states if not provided
@@ -258,7 +258,7 @@ impl XLstm {
         let (linear1, dropout, linear2) = &self.output_head;
         x = linear1.forward(&x)?;
         x = x.gelu()?;
-        x = dropout.forward(&x, true)?;
+       // x = dropout.forward(&x, true)?;
         let output = linear2.forward(&x)?;
 
         Ok((output, hidden_states))
