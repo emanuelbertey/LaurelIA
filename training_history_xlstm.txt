@@ -314,3 +314,24 @@ To tach
 -> Batch [1/420] Loss: 4.6476 Acc: 11.52% bach o sin drop taza de aprendisaje muy bajo 
 -> Batch [21/420] Loss: 4.7352 Acc: 9.98% modo solo normalizar antes ajustes de lr y estabilizadores de 2 dimenciones 
 -> Batch [31/420] Loss: 4.6654 Acc: 11.14%
+-> Batch [131/420] Loss: 4.5569 Acc: 12.41%
+-> Batch [231/420] Loss: 4.5340 Acc: 12.69%
+-> Batch [281/420] Loss: 4.5177 Acc: 12.90%
+-> Batch [41/420] Loss: 4.3426 Acc: 14.01%
+Epoch [  2/50], Loss: 4.3131, Accuracy: 14.75%
+-> Batch [1/420] Loss: 4.3009 Acc: 13.87%
+-> Batch [51/420] Loss: 4.2162 Acc: 15.51%
+-> Batch [101/420] Loss: 4.1927 Acc: 15.90%
+-> Batch [271/420] Loss: 4.2041 Acc: 16.06%
+-> Batch [411/420] Loss: 4.1124 Acc: 17.04%
+-> Batch [131/420] Loss: 4.0260 Acc: 17.94%
+-> Batch [271/420] Loss: 4.0336 Acc: 18.11%
+-> Batch [141/420] Loss: 3.9573 Acc: 18.85%
+-> Batch [131/420] Loss: 3.8446 Acc: 20.46%
+-> Batch [391/420] Loss: 3.8743 Acc: 20.16%
+-> Batch [211/420] Loss: 3.8210 Acc: 20.89%
+-> Batch [11/420] Loss: 3.8653 Acc: 19.10%
+-> Batch [121/420] Loss: 3.7588 Acc: 21.75%
+-> Batch [1/420] Loss: 3.7398 Acc: 21.29%
+-> Batch [391/420] Loss: 3.7551 Acc: 21.78%
+-> Batch [151/420] Loss: 3.6902 Acc: 22.70%

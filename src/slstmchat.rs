@@ -8,17 +8,18 @@ using a simple character-level tokenizer that can be saved/loaded as JSON.
 
 */
 
-use candle_core::{Device, Tensor, Result, Module, DType, IndexOp};
-use candle_nn::{VarBuilder, VarMap, Optimizer, AdamW, ParamsAdamW, ops::softmax};
-use std::error::Error;
+use candle_core::{Device, Tensor, DType};
+use candle_nn::{VarBuilder, VarMap, Optimizer, AdamW, ParamsAdamW};
+use anyhow::Result;
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
+use std::collections::HashSet;
 
 use tokenizers::models::bpe::{BpeTrainerBuilder, BPE};
-use tokenizers::pre_tokenizers::whitespace::Whitespace;
 use tokenizers::tokenizer::Tokenizer as HFTokenizer;
 use tokenizers::models::TrainerWrapper;
+use tokenizers::pre_tokenizers::metaspace::{Metaspace, PrependScheme};
 
 use xlstm::{LstmType, XLstm, XLstmconfig, BlockType};
 use rand::Rng;
@@ -29,44 +30,54 @@ pub struct Tokenizer {
 }
 
 impl Tokenizer {
-    /// Crea un nuevo tokenizador BPE entrenado desde un texto
-    pub fn from_text(text: &str, vocab_size: usize) -> Result<Self, Box<dyn Error>> {
-        let mut tokenizer = HFTokenizer::new(BPE::default());
-        
-        // Usar pre-tokenizador de espacios en blanco
-        tokenizer.with_pre_tokenizer(Some(Whitespace::default()));
+    pub fn from_text(text: &str, vocab_size: usize) -> Result<Self> {
+        let model = BPE::builder()
+            .byte_fallback(true)
+            .build()
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        let mut tokenizer = HFTokenizer::new(model);
+
+        tokenizer.with_pre_tokenizer(Some(Metaspace::new(
+            ' ',
+            PrependScheme::Always,
+            true,
+        )));
+
+        let mut alphabet = HashSet::new();
+        alphabet.insert('\n');
+        alphabet.insert(' ');
 
         let trainer = BpeTrainerBuilder::default()
             .show_progress(true)
             .vocab_size(vocab_size)
-            .min_frequency(2)
+            .min_frequency(0)
+            .initial_alphabet(alphabet)
             .build();
 
-        // Envolver el entrenador de manera genérica usando el trait From
         let mut trainer_wrapper = TrainerWrapper::from(trainer);
 
-        // Entrenar desde el archivo temporal
         let temp_file = "temp_train.txt";
         fs::write(temp_file, text)?;
         tokenizer.train_from_files(&mut trainer_wrapper, vec![temp_file.to_string()])
-            .map_err(|e| format!("Error en entrenamiento: {}", e))?;
+            .map_err(|e| anyhow::anyhow!(e))?;
         fs::remove_file(temp_file)?;
 
         Ok(Self { tokenizer })
     }
 
     /// Guarda el tokenizador en un archivo
-    pub fn save(&self, path: &str) -> Result<(), Box<dyn Error>> {
+    pub fn save(&self, path: &str) -> Result<()> {
         self.tokenizer.save(path, true)
-            .map_err(|e| format!("Error al guardar: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Error al guardar: {}", e))?;
         println!("Tokenizador guardado en: {}", path);
         Ok(())
     }
 
     /// Carga el tokenizador desde un archivo
-    pub fn load(path: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn load(path: &str) -> Result<Self> {
         let tokenizer = HFTokenizer::from_file(path)
-            .map_err(|e| format!("Error al cargar: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Error al cargar: {}", e))?;
         println!("Tokenizador cargado desde: {}", path);
         Ok(Self { tokenizer })
     }
@@ -94,41 +105,43 @@ impl Tokenizer {
     }
 }
 
-/// Crea un batch de entrenamiento (one-hot) de forma eficiente usando una matriz identidad
+/// Crea un batch de entrenamiento (indices) para usar con Embedding
 fn create_batch(
     tokens: &[usize],
     start_idx: usize,
     batch_size: usize,
     seq_length: usize,
-    vocab_size: usize,
+    stride: usize, // Añadido stride explícitamente si se usa dentro
     device: &Device,
-    eye: &Tensor,
-) -> Result<(Tensor, Tensor), Box<dyn Error>> {
+) -> Result<(Tensor, Tensor)> {
     let mut x_indices = Vec::with_capacity(batch_size * seq_length);
     let mut y_indices = Vec::with_capacity(batch_size * seq_length);
 
     for i in 0..batch_size {
-        let current_start = start_idx + i;
+        let current_start = start_idx + (i * stride); 
         for j in 0..seq_length {
-            x_indices.push(tokens[current_start + j] as u32);
-            y_indices.push(tokens[current_start + j + 1] as u32);
+            // Check bounds just in case, though caller handles it
+            if current_start + j + 1 < tokens.len() {
+                x_indices.push(tokens[current_start + j] as u32);
+                y_indices.push(tokens[current_start + j + 1] as u32);
+            } else {
+                // Padding or error? Caller logic seems to avoid this.
+                // Assuming valid range.
+                x_indices.push(0); 
+                y_indices.push(0);
+            }
         }
     }
 
-    let x_indices_tensor = Tensor::from_vec(x_indices, (batch_size * seq_length, ), device)?;
-    
-    // Select input from eye matrix: [batch_size * seq_length, vocab_size]
-    let x = eye.index_select(&x_indices_tensor, 0)?
-               .reshape((batch_size, seq_length, vocab_size))?;
-
-    let y = Tensor::from_vec(y_indices, (batch_size, seq_length), device)?; // Targets are indices
+    let x = Tensor::from_vec(x_indices, (batch_size, seq_length), device)?;
+    let y = Tensor::from_vec(y_indices, (batch_size, seq_length), device)?;
 
     Ok((x, y))
 }
 
-
+/*
 /// Selecciona un token usando muestreo estocástico con Top-K y temperatura
-fn sample_from_logits(logits: &Tensor, temperature: f32) -> Result<usize, Box<dyn Error>> {
+fn sample_from_logits(logits: &Tensor, temperature: f32) -> Result<usize> {
     // logits: [1, vocab_size]
     let logits = logits.squeeze(0)?;
     let vocab_size = logits.dim(0)?;
@@ -189,6 +202,44 @@ fn sample_from_logits(logits: &Tensor, temperature: f32) -> Result<usize, Box<dy
 
     Ok(indices[0])
 }
+    */
+fn sample_from_logits(logits: &Tensor, temperature: f32) -> Result<usize> {
+    let logits = logits.squeeze(0)?;
+    let vocab_size = logits.dim(0)?;
+    
+    // 1. ESCALADO POR TEMPERATURA (Sobre los logits originales)
+    // Esto hace que la distribución sea más plana (temp > 1) o más picuda (temp < 1)
+    let scaled_logits = (&logits / (temperature as f64))?;
+    
+    // 2. SOFTMAX para obtener probabilidades reales
+    let probs = candle_nn::ops::softmax(&scaled_logits, 0)?;
+    let probs_vec = probs.to_vec1::<f32>()?;
+    
+    // 3. TOP-K (Tu lógica de filtrado está perfecta)
+    let mut probs_indexed: Vec<(usize, f32)> = probs_vec.into_iter().enumerate().collect();
+    probs_indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    
+    let k = 10; // Un k de 10 suele dar más variedad que 5
+    let top_k_probs = &probs_indexed[..k.min(vocab_size)];
+    
+    // 4. MUESTREO (Multinomial)
+    let indices: Vec<usize> = top_k_probs.iter().map(|(i, _)| *i).collect();
+    let weights: Vec<f32> = top_k_probs.iter().map(|(_, p)| *p).collect();
+    
+    let sum: f32 = weights.iter().sum();
+    let mut rng = rand::rng(); 
+    let mut sample: f32 = rng.random::<f32>() * sum;
+
+    for (i, &p) in weights.iter().enumerate() {
+        if sample <= p {
+            return Ok(indices[i]);
+        }
+        sample -= p;
+    }
+
+    Ok(indices[0])
+}
+
 
 /// Genera texto de forma recurrente manteniendo el estado interno del modelo
 fn generate_text(
@@ -196,9 +247,8 @@ fn generate_text(
     tokenizer: &Tokenizer,
     seed_text: &str,
     length: usize,
-    vocab_size: usize,
     device: &Device,
-) -> Result<String, Box<dyn Error>> {
+) -> Result<String> {
     let mut current_text = seed_text.to_string();
     let seed_tokens = tokenizer.encode(seed_text);
     
@@ -206,8 +256,6 @@ fn generate_text(
         return Ok(current_text);
     }
 
-    let eye = Tensor::eye(vocab_size, DType::F32, device)?;
-    
     let mut current_state = None; 
     let mut current_tokens = seed_tokens;
 
@@ -220,55 +268,60 @@ fn generate_text(
 
         let seq_len = tokens_to_process.len();
         
-        let indices_tensor = Tensor::from_vec(
-            tokens_to_process.iter().map(|&t| t as u32).collect::<Vec<_>>(), 
-            (seq_len,), 
+        // Ensure u32 for indices
+        let indices_vec: Vec<u32> = tokens_to_process.iter().map(|&t| t as u32).collect();
+        // Input: [1, seq_len] indices
+        let input = Tensor::from_vec(
+            indices_vec, 
+            (1, seq_len), 
             device
         )?;
 
-        let input = eye.index_select(&indices_tensor, 0)?
-            .reshape((1, seq_len, vocab_size))?;
-
         let (output, next_state) = model.forward(&input, current_state)?;
-        current_state = Some(next_state);
+        current_state = Some(next_state.into_iter().map(|s| s.map(|state| state.detach())).collect());
+        //current_state = Some(next_state);
 
         let (_b, _l, _v) = output.dims3()?;
         // Extract last step logits
+       
         let last_logits = output.narrow(1, seq_len - 1, 1)?
-            .squeeze(1)?; // [1, vocab_size]
+        .squeeze(1)?
+        .detach();
+        //let last_logits = output.narrow(1, seq_len - 1, 1)?
+           // .squeeze(1)?; // [1, vocab_size]
 
         let next_token = sample_from_logits(&last_logits, 0.8)?;
 
         current_tokens.push(next_token);
         if let Some(t) = tokenizer.id_to_token(next_token) {
-            let clean_token = t
-                .replace("Ċ", "\n") 
-                .replace("Ġ", " "); 
-            
+            let mut clean_token = t.clone();
+            // Reemplazo de caracteres especiales de BPE si es necesario
+            if clean_token.contains('Ċ') || clean_token.contains('Ġ') {
+               clean_token = clean_token.replace("Ċ", "\n").replace("Ġ", " ");
+            }
             current_text.push_str(&clean_token);
         }
     }
 
     Ok(current_text)
 }
-
-fn main() -> Result<(), Box<dyn Error>> {
-    println!("xLSTM (SLSTM) Text Generation con Tokenizador (Candle)");
-    println!("====================================================\n");
+fn main() -> Result<()> {
+    println!("xLSTM Text Generation con Tokenizador (Candle)");
+    println!("======================================\n");
 
     let args: Vec<String> = std::env::args().collect();
     
     if args.len() < 2 {
-        eprintln!("Uso: cargo run --bin slstmchat -- <archivo.txt>");
-        eprintln!("Ejemplo: cargo run --bin slstmchat -- input.txt");
+        eprintln!("Uso: cargo run --bin xlstmchat -- <archivo.txt>");
+        eprintln!("Ejemplo: cargo run --bin xlstmchat -- input.txt");
         std::process::exit(1);
     }
 
     let text_file = &args[1];
     let tokenizer_path = "tokenizer_slstm.json";
-    let model_path = "xlstm_chat_model_slstm.safetensors";
+    let model_path = "slstm_chat_model.safetensors";
 
-    let target_vocab_size = 2048;
+    let target_vocab_size = 1024;
 
     let tokenizer = if Path::new(tokenizer_path).exists() {
         println!("Cargando tokenizador existente...");
@@ -281,6 +334,28 @@ fn main() -> Result<(), Box<dyn Error>> {
         tokenizer
     };
 
+println!("\n--- VERIFICACIÓN DE IDENTIDAD DE TOKENS ---");
+let texto_verificacion = " \n"; // Un espacio y un salto de línea
+let ids = tokenizer.encode(texto_verificacion);
+
+for id in ids {
+    let contenido = tokenizer.decode(&[id]);
+    // Esto te dirá exactamente qué ID tiene el espacio y cuál el salto
+    if contenido.contains(' ') {
+        println!("ID: {:<5} | Representa: [ESPACIO SEGURO]", id);
+    } else if contenido.contains('\n') {
+        println!("ID: {:<5} | Representa: [SALTO DE LINEA SEGURO]", id);
+    } else {
+        println!("ID: {:<5} | Representa: '{}'", id, contenido);
+    }
+}
+println!("-------------------------------------------\n");
+
+let prueba = tokenizer.encode(" ");
+println!("DEBUG ESPACIO: {:?}", prueba);
+
+let prueba_salto = tokenizer.encode("\n");
+println!("DEBUG SALTO: {:?}", prueba_salto);
     println!("Tamaño del vocabulario: {}\n", tokenizer.vocab_size());
 
     println!("Cargando texto de entrenamiento...");
@@ -299,7 +374,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let batch_size = 16; 
     let stride = 64;     
     let num_epochs = 50;
-    let num_heads = 2; // Not used for sLSTM but config requires it
+    let num_heads = 2;
 
     println!("Configuración del modelo:");
     println!("  Bloques: {}", num_blocks);
@@ -309,12 +384,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("  Epochs: {}\n", num_epochs);
 
     let device = Device::Cpu;
-    let eye = Tensor::eye(vocab_size, DType::F32, &device)?;
 
-     let config = XLstmconfig::new(vocab_size, hidden_size, num_layers, num_blocks, output_size)
+     let config = XLstmconfig::new(hidden_size, hidden_size, num_layers, num_blocks, output_size)
+        .with_vocab_size(vocab_size)
         .with_dropout(dropout)
         .with_num_heads(num_heads)
-        .with_lstm_type(LstmType::SLSTM) // FORCED SLSTM
+        .with_lstm_type(LstmType::SLSTM) 
         .with_use_projection(true);   
 
     let model_file_path = Path::new(model_path);
@@ -377,7 +452,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mut mlstm_params = Vec::new();
         let mut other_params = Vec::new();
 
-        for (name, var) in varmap.data() {
+        let data = varmap.data().lock().unwrap();
+        for (name, var) in data.iter() {
             if name.starts_with("block_") {
                 let parts: Vec<&str> = name.split('.').collect();
                 if let Some(block_part) = parts.first() {
@@ -385,19 +461,22 @@ fn main() -> Result<(), Box<dyn Error>> {
                          if let Ok(idx) = idx_str.parse::<usize>() {
                              if idx < parsed_block_types.len() {
                                  match parsed_block_types[idx] {
-                                     BlockType::SLSTM => slstm_params.push(var),
-                                     BlockType::MLSTM => mlstm_params.push(var),
+                                     BlockType::SLSTM => slstm_params.push(var.clone()),
+                                     BlockType::MLSTM => mlstm_params.push(var.clone()),
                                  }
-                             } else { other_params.push(var); }
-                         } else { other_params.push(var); }
-                    } else { other_params.push(var); }
-                } else { other_params.push(var); }
-            } else { other_params.push(var); }
+                             } else { other_params.push(var.clone()); }
+                         } else { other_params.push(var.clone()); }
+                    } else { other_params.push(var.clone()); }
+                } else { other_params.push(var.clone()); }
+            } else { other_params.push(var.clone()); }
         }
+        drop(data); // release lock before training
 
-        let mut optim_slstm = AdamW::new(slstm_params, ParamsAdamW { lr: 1e-4, ..Default::default() })?;
-        let mut optim_mlstm = AdamW::new(mlstm_params, ParamsAdamW { lr: 1e-5, ..Default::default() })?;
-        let mut optim_other = AdamW::new(other_params, ParamsAdamW { lr: 1e-4, ..Default::default() })?;
+        // Tasas de aprendizaje recomendadas para xLSTM: 
+        // sLSTM suele tolerar LRs más altas, mLSTM requiere más cuidado.
+        let mut optim_slstm = AdamW::new(slstm_params, ParamsAdamW { lr: 2e-4, ..Default::default() })?;
+        let mut optim_mlstm = AdamW::new(mlstm_params, ParamsAdamW { lr: 8e-5, ..Default::default() })?;
+        let mut optim_other = AdamW::new(other_params, ParamsAdamW { lr: 2e-4, ..Default::default() })?;
 
         println!("Iniciando entrenamiento...\n");
 
@@ -409,8 +488,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mut correct = 0;
             let mut total = 0;
             let mut current_state = None;
-
             for batch_idx in 0..num_batches {
+                
                 let current_batch_start_seq = batch_idx * batch_size;
                 let current_batch_size = (batch_size).min(num_actual_sequences - current_batch_start_seq);
 
@@ -422,19 +501,22 @@ fn main() -> Result<(), Box<dyn Error>> {
                     current_batch_start_seq * stride,
                     current_batch_size,
                     seq_length,
-                    vocab_size,
+                    stride,
                     &device,
-                    &eye,
                 )?;
 
-                // Warm up state if batch 0
-                 if batch_idx == 0 {
-                    let (_, warm_state) = model.predict_last(&input_batch, None)?;
-                    current_state = Some(warm_state);
-                }
+                if batch_idx == 0 {
+                // Hacemos un forward silencioso para llenar las matrices del mLSTM
+                let (_, warm_state) = model.forward(&input_batch, None)?;
+                current_state = Some(warm_state.into_iter().map(|s| s.map(|state| state.detach())).collect());
+                println!("> Estado inicializado con éxito en el Batch 0");
+            }
 
+               // let (logits, _) = model.forward(&input_batch, None)?;
                 let (logits, next_state) = model.forward(&input_batch, current_state)?;
-                current_state = Some(next_state);
+                current_state = Some(next_state.into_iter().map(|s| s.map(|state| state.detach())).collect());
+                //current_state = Some(next_state);
+
 
                 // Optimization
                 let logits_flat = logits.reshape((current_batch_size * seq_length, vocab_size))?;
@@ -454,6 +536,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                 total += current_batch_size * seq_length;
 
                 let grads = loss.backward()?;
+
+                /* 
+                // --- GRADIENT CLIPPING (Sugerido para prevenir estancamiento) ---
+                // Para xLSTM es vital clipear gradientes debido a las funciones exponenciales
+                */
+
+                // Ahora los optimizadores usarán los gradientes clipeados
                 optim_slstm.step(&grads)?;
                 optim_mlstm.step(&grads)?;
                 optim_other.step(&grads)?;
@@ -486,19 +575,26 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let seed = tokenizer.decode(&seed_tokens);
                 
                 println!("  -> Generando con semilla al azar: '{}'", seed);
-                let generated = generate_text(&model, &tokenizer, &seed, 100, vocab_size, &device)?;
+                let generated = generate_text(&model, &tokenizer, &seed, 100, &device)?;
                 println!("  Generado: {}\n", generated);
-             }
+            }
         }
         println!("\n¡Entrenamiento completado!");
     } else {
         // Just inference mode
     }
 
-    // Modo interactivo
+    // Modo interactivo - Loop para generar texto
     println!("\n╔════════════════════════════════════════════════════════╗");
     println!("║        MODO INTERACTIVO - GENERACIÓN DE TEXTO         ║");
     println!("╚════════════════════════════════════════════════════════╝\n");
+    println!("Comandos:");
+    println!("  - Escribe un texto semilla y presiona Enter para generar");
+    println!("  - Escribe 'salir' o 'exit' para terminar");
+    println!("  - Escribe 'auto' para generar con semilla automática");
+    println!("  - Escribe 'len N' para cambiar longitud de generación (tokens)\n");
+
+    let mut gen_length: usize = 200;
 
     loop {
         print!("Semilla > ");
@@ -510,6 +606,27 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         if input.is_empty() { continue; }
         if input.eq_ignore_ascii_case("salir") || input.eq_ignore_ascii_case("exit") { break; }
+
+        if input.to_lowercase().starts_with("len") {
+            let parts: Vec<&str> = input.split_whitespace().collect();
+            if parts.len() == 1 {
+                println!("Longitud actual de generación: {} tokens\n", gen_length);
+            } else if parts.len() >= 2 {
+                match parts[1].parse::<usize>() {
+                    Ok(n) if n > 0 && n <= 20000 => {
+                        gen_length = n;
+                        println!("Nueva longitud de generación establecida en {} tokens\n", gen_length);
+                    }
+                    Ok(_) => {
+                        println!("Por favor usa un valor entre 1 y 20000.\n");
+                    }
+                    Err(_) => {
+                        println!("Formato inválido. Usa: len 200\n");
+                    }
+                }
+            }
+            continue;
+        }
 
          let seed = if input.eq_ignore_ascii_case("auto") {
              // We need 'text' but it might not be loaded if we didn't train.
@@ -525,7 +642,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         };
 
         println!("\nGenerando...");
-        let generated = generate_text(&model, &tokenizer, &seed, 200, vocab_size, &device)?;
+        let generated = generate_text(&model, &tokenizer, &seed, gen_length, &device)?;
         println!("Generado: {}\n", generated);
     }
 

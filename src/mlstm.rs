@@ -152,7 +152,7 @@ impl MLstm {
 
             // Inter-layer Dropout
             layer_input = if layer_idx < self.num_layers - 1 && self.dropout > 0.0 {
-                self.dropout_layer.forward(&h_seq, false)?
+                self.dropout_layer.forward(&h_seq, true)?
             } else {
                 h_seq
             };
@@ -312,12 +312,12 @@ impl MLstmcell {
         let i_log = chunks[0].clone()
             .reshape((batch_size, seq_len, self.num_heads, head_dim))?
             .permute((0, 2, 1, 3))?
-            .clamp(-6.0, 6.0)?;
+            .clamp(-10.0, 10.0)?;
 
         let f_log = chunks[1].clone()
             .reshape((batch_size, seq_len, self.num_heads, head_dim))?
             .permute((0, 2, 1, 3))?
-            .clamp(-6.0, 6.0)?;
+            .clamp(-10.0, 10.0)?;
         let f_log = f_log.affine(1.0, 1.0)?;
 
         let o_pre = chunks[2].clone();
