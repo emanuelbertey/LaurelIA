@@ -61,9 +61,10 @@ pub struct MLstmconfig {
     pub num_layers: usize,
     /// Number of heads for multi-head mLSTM
     pub num_heads: usize,
+    /// Expansion factor for inner dimension
+    pub expansion_factor: usize,
     /// Dropout probability
     pub dropout: f32,
-    // Initializer is handled by VarBuilder/init logic
 }
 
 impl MLstmconfig {
@@ -73,8 +74,14 @@ impl MLstmconfig {
             d_hidden,
             num_layers,
             num_heads,
+            expansion_factor: 2,
             dropout: 0.0,
         }
+    }
+
+    pub fn with_expansion_factor(mut self, factor: usize) -> Self {
+        self.expansion_factor = factor;
+        self
     }
 
     pub fn with_dropout(mut self, dropout: f32) -> Self {
@@ -88,7 +95,7 @@ impl MLstmconfig {
         for i in 0..self.num_layers {
             let input_size = if i == 0 { self.d_input } else { self.d_hidden };
             let layer_vb = vb.pp(format!("layer_{}", i));
-            layers.push(MLstmcell::new(input_size, self.d_hidden, self.num_heads, layer_vb)?);
+            layers.push(MLstmcell::new(input_size, self.d_hidden, self.num_heads, self.expansion_factor, layer_vb)?);
         }
 
         Ok(MLstm {
@@ -98,6 +105,7 @@ impl MLstmconfig {
             d_hidden: self.d_hidden,
             num_layers: self.num_layers,
             num_heads: self.num_heads,
+            expansion_factor: self.expansion_factor,
             dropout: self.dropout,
         })
     }
@@ -118,6 +126,8 @@ pub struct MLstm {
     pub num_layers: usize,
     /// Number of heads
     pub num_heads: usize,
+    /// Expansion factor
+    pub expansion_factor: usize,
     /// Dropout probability
     pub dropout: f32,
 }
@@ -152,7 +162,7 @@ impl MLstm {
 
             // Inter-layer Dropout
             layer_input = if layer_idx < self.num_layers - 1 && self.dropout > 0.0 {
-                self.dropout_layer.forward(&h_seq, false)?
+                self.dropout_layer.forward(&h_seq, true)?
             } else {
                 h_seq
             };
@@ -163,7 +173,8 @@ impl MLstm {
 
     /// Initialize hidden states
     fn init_hidden(&self, batch_size: usize, device: &Device) -> Result<Vec<MLstmstate>> {
-        let head_dim = self.d_hidden / self.num_heads;
+        let d_inner = self.d_hidden * self.expansion_factor;
+        let head_dim = d_inner / self.num_heads;
         
         (0..self.num_layers)
             .map(|_| {
@@ -195,6 +206,8 @@ pub struct MLstmcell {
     pub w_k: Linear,
     /// Value projection
     pub w_v: Linear,
+    /// Down projection
+    pub w_down: Linear,
     /// LayerNorm for multi-head normalization
     pub ln: LayerNorm,
     /// Input size
@@ -203,6 +216,8 @@ pub struct MLstmcell {
     pub hidden_size: usize,
     /// Number of heads
     pub num_heads: usize,
+    /// Expansion factor
+    pub expansion_factor: usize,
 }
 
 impl MLstmcell {
@@ -210,42 +225,45 @@ impl MLstmcell {
         input_size: usize,
         hidden_size: usize,
         num_heads: usize,
+        expansion_factor: usize,
         vb: VarBuilder,
     ) -> Result<Self> {
+        let d_inner = hidden_size * expansion_factor;
+        
         let weight_ih = vb.get_with_hints(
-            (3 * hidden_size, input_size), 
+            (3 * d_inner, input_size), 
             "weight_ih", 
             candle_nn::init::DEFAULT_KAIMING_NORMAL 
         )?;
         
-        // weight_hh maintained for compatibility/sequential mode if needed
         let weight_hh = vb.get_with_hints(
-            (3 * hidden_size, hidden_size), 
+            (3 * d_inner, hidden_size), 
             "weight_hh", 
             candle_nn::init::DEFAULT_KAIMING_NORMAL
         )?;
 
         let bias = vb.get_with_hints(
-            3 * hidden_size, 
+            3 * d_inner, 
             "bias", 
             candle_nn::init::Init::Const(0.0)
         )?;
 
-        // Bias offset to replicate Burn's manual initialization:
-        // forget gate bias = 0.5, others = 0.0
         let device = vb.device();
-        let mut b_offset_vals = vec![0.0f32; 3 * hidden_size];
-        for i in hidden_size..(2 * hidden_size) {
+        let mut b_offset_vals = vec![0.0f32; 3 * d_inner];
+        for i in d_inner..(2 * d_inner) {
             b_offset_vals[i] = 0.5;
         }
-        let bias_offset = Tensor::from_vec(b_offset_vals, (3 * hidden_size,), device)?;
+        let bias_offset = Tensor::from_vec(b_offset_vals, (3 * d_inner,), device)?;
 
-        let head_dim = hidden_size / num_heads;
+        let head_dim = d_inner / num_heads;
 
-        // Q, K, V
-        let w_q = linear_no_bias(input_size, hidden_size, vb.pp("w_q"))?;
-        let w_k = linear_no_bias(input_size, hidden_size, vb.pp("w_k"))?;
-        let w_v = linear_no_bias(input_size, hidden_size, vb.pp("w_v"))?;
+        // Q, K, V Proyectan a d_inner
+        let w_q = linear_no_bias(input_size, d_inner, vb.pp("w_q"))?;
+        let w_k = linear_no_bias(input_size, d_inner, vb.pp("w_k"))?;
+        let w_v = linear_no_bias(input_size, d_inner, vb.pp("w_v"))?;
+        
+        // Down projection: d_inner -> hidden_size
+        let w_down = linear_no_bias(d_inner, hidden_size, vb.pp("w_down"))?;
         
         let ln = layer_norm(head_dim, 1e-5, vb.pp("ln"))?;
 
@@ -257,10 +275,12 @@ impl MLstmcell {
             w_q,
             w_k,
             w_v,
+            w_down,
             ln,
             input_size,
             hidden_size,
             num_heads,
+            expansion_factor,
         })
     }
 
@@ -271,7 +291,8 @@ impl MLstmcell {
         state: &MLstmstate,
     ) -> Result<(Tensor, MLstmstate)> {
         let (batch_size, seq_len, _) = input_seq.dims3()?;
-        let head_dim = self.hidden_size / self.num_heads;
+        let d_inner = self.hidden_size * self.expansion_factor;
+        let head_dim = d_inner / self.num_heads;
         let device = input_seq.device();
 
         // 1. Parallel Projections (Q, K, V)
@@ -302,22 +323,23 @@ impl MLstmcell {
         let input_flat = input_seq.reshape((batch_size * seq_len, self.input_size))?;
         
         let weight_ih_t = self.weight_ih.t()?.contiguous()?;
+        let d_inner = self.hidden_size * self.expansion_factor;
         let gates_flat = input_flat.matmul(&weight_ih_t)?;
-        let gates = gates_flat.reshape((batch_size, seq_len, 3 * self.hidden_size))?
-            .broadcast_add(&self.bias.reshape((1, 1, 3 * self.hidden_size))?)?
-            .broadcast_add(&self.bias_offset.reshape((1, 1, 3 * self.hidden_size))?)?;
+        let gates = gates_flat.reshape((batch_size, seq_len, 3 * d_inner))?
+            .broadcast_add(&self.bias.reshape((1, 1, 3 * d_inner))?)?
+            .broadcast_add(&self.bias_offset.reshape((1, 1, 3 * d_inner))?)?;
         
         let chunks = gates.chunk(3, 2)?; // Chunk on last dim (dim 2)
         
         let i_log = chunks[0].clone()
             .reshape((batch_size, seq_len, self.num_heads, head_dim))?
             .permute((0, 2, 1, 3))?
-            .clamp(-6.0, 6.0)?;
+            .clamp(-10.0, 10.0)?;
 
         let f_log = chunks[1].clone()
             .reshape((batch_size, seq_len, self.num_heads, head_dim))?
             .permute((0, 2, 1, 3))?
-            .clamp(-6.0, 6.0)?;
+            .clamp(-10.0, 10.0)?;
         let f_log = f_log.affine(1.0, 1.0)?;
 
         let o_pre = chunks[2].clone();
@@ -441,8 +463,15 @@ impl MLstmcell {
         let h_ln = self.ln.forward(&h_reshaped)?; // Works if LN dim matches D_h?
         // Wait, LN config is `head_dim`. So it normalizes the last dimension. Correct.
        
-        let h_combined = h_ln.reshape((batch_size, seq_len, self.hidden_size))?;
-        let h_seq = ((o * h_combined)?.clamp(-10.0, 10.0))?;
+        let h_combined_inner = h_ln.reshape((batch_size, seq_len, d_inner))?;
+        
+        // Según el paper, o_t se aplica a la salida normalizada antes de la proyección final.
+        // Aplicamos el output gate sobre la dimensión expandida (o * h_combined_inner).
+        let h_inner_gated = (o * h_combined_inner)?;
+        
+        // 4. Down Projection: Comprimimos e de d_inner a hidden_size
+        let h_seq = self.w_down.forward(&h_inner_gated)?;
+        let h_seq = h_seq.clamp(-10.0, 10.0)?;
 
         // 5. Update State (Final T) 
         let last_idx = seq_len - 1; 
@@ -466,26 +495,23 @@ impl MLstmcell {
 
         let mut final_cell = (final_cell_initial + final_cell_update)?; 
 
-        // Soft-normalización dinámica de la matriz de memoria (equivalente a la versión Burn)
-        // Calculamos |C|_max en todas las dimensiones y aplicamos:
-        // scale = 10 / (10 + |C|_max)
-        // final_cell = final_cell * scale
+        // Soft-normalización dinámica de la matriz de memoria (local por cabeza y muestra)
+        // Calculamos |C|_max por cada (batch, head) y aplicamos la escala localmente.
         let abs_cell = final_cell.abs()?;
-        let c_max1 = abs_cell.max(3)?; 
-        let c_max2 = c_max1.max(2)?;   
-        let c_max3 = c_max2.max(1)?;   
-        let c_abs_max = c_max3.max(0)?; 
-
+        let c_max_cols = abs_cell.max(3)?; // Max across head_dim_2 -> [B, H, D]
+        let c_max_rows = c_max_cols.max(2)?; // Max across head_dim_1 -> [B, H]
+        
         let ten = Tensor::new(10.0f32, device)?;
-        let denom = ten.broadcast_add(&c_abs_max)?; 
-        let scale_scalar = (&ten / &denom)?; 
-        let scale_factor = scale_scalar
-            .reshape((1, 1, 1, 1))?
-            .broadcast_as(final_cell.shape())?;
-        final_cell = (final_cell * &scale_factor)?; 
+        let denom = c_max_rows.broadcast_add(&ten)?; 
+        let scale_factor = ten.broadcast_div(&denom)?;
+        
+        // Redimensionar scale_factor de [B, H] a [B, H, 1, 1] para el matmul estable
+        let scale_factor = scale_factor.unsqueeze(2)?.unsqueeze(3)?;
+        
+        final_cell = final_cell.broadcast_mul(&scale_factor)?;
  
-         let final_hidden = h_seq.narrow(1, last_idx, 1)?.reshape((batch_size, self.hidden_size))?; 
+        let final_hidden = h_seq.narrow(1, last_idx, 1)?.reshape((batch_size, self.hidden_size))?; 
  
-         Ok((h_seq, MLstmstate::new(final_cell, final_hidden, final_norm, final_m)))
+        Ok((h_seq, MLstmstate::new(final_cell, final_hidden, final_norm, final_m)))
     }
 }
