@@ -20,6 +20,7 @@ use tokenizers::models::bpe::{BpeTrainerBuilder, BPE};
 use tokenizers::tokenizer::Tokenizer as HFTokenizer;
 use tokenizers::models::TrainerWrapper;
 use tokenizers::pre_tokenizers::metaspace::{Metaspace, PrependScheme};
+use tokenizers::AddedToken;
 
 use xlstm::{LstmType, XLstm, XLstmconfig, BlockType};
 use rand::Rng;
@@ -31,6 +32,20 @@ pub struct Tokenizer {
 
 impl Tokenizer {
     pub fn from_text(text: &str, vocab_size: usize) -> Result<Self> {
+        // 1. Definir los tokens especiales
+        let special_tokens_strings = vec![
+            "[ENG]".to_string(),
+            "[SEP]".to_string(),
+            "[ESP]".to_string(),
+            "[EOS]".to_string(),
+            "<PAD>".to_string(),
+        ];
+
+        let special_tokens: Vec<AddedToken> = special_tokens_strings
+            .iter()
+            .map(|t| AddedToken::from(t, true))
+            .collect();
+
         let model = BPE::builder()
             .byte_fallback(true)
             .build()
@@ -38,6 +53,7 @@ impl Tokenizer {
 
         let mut tokenizer = HFTokenizer::new(model);
 
+        // Configurar Metaspace (el carácter '_' visual para espacios)
         tokenizer.with_pre_tokenizer(Some(Metaspace::new(
             ' ',
             PrependScheme::Always,
@@ -48,20 +64,28 @@ impl Tokenizer {
         alphabet.insert('\n');
         alphabet.insert(' ');
 
+        // 2. Configurar el Trainer con los Special Tokens
         let trainer = BpeTrainerBuilder::default()
             .show_progress(true)
             .vocab_size(vocab_size)
-            .min_frequency(0)
+            .min_frequency(2) // Subimos a 2 para evitar tokens basura
             .initial_alphabet(alphabet)
+            .special_tokens(special_tokens.clone()) // <--- VITAL
             .build();
 
         let mut trainer_wrapper = TrainerWrapper::from(trainer);
 
+        // 3. Entrenar
         let temp_file = "temp_train.txt";
         fs::write(temp_file, text)?;
         tokenizer.train_from_files(&mut trainer_wrapper, vec![temp_file.to_string()])
             .map_err(|e| anyhow::anyhow!(e))?;
         fs::remove_file(temp_file)?;
+
+        // 4. Registrar los tokens en el tokenizador
+        for token in special_tokens_strings {
+            tokenizer.add_special_tokens(&[AddedToken::from(token, true)]);
+        }
 
         Ok(Self { tokenizer })
     }
@@ -321,7 +345,7 @@ fn main() -> Result<()> {
     let tokenizer_path = "tokenizer_slstm.json";
     let model_path = "slstm_chat_model.safetensors";
 
-    let target_vocab_size = 1024;
+    let target_vocab_size = 2024;
 
     let tokenizer = if Path::new(tokenizer_path).exists() {
         println!("Cargando tokenizador existente...");
@@ -364,7 +388,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
     println!("Tokens totales: {}\n", tokens.len());
 
     let vocab_size = tokenizer.vocab_size();
-    let hidden_size = 256; 
+    let hidden_size = 512; 
     let num_layers = 1;
     let num_blocks = 3;
     let output_size = vocab_size; 
@@ -385,7 +409,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
 
     let device = Device::Cpu;
 
-     let config = XLstmconfig::new(hidden_size, hidden_size, num_layers, num_blocks, output_size)
+     let config = XLstmconfig::new(vocab_size, hidden_size, num_layers, num_blocks, output_size)
         .with_vocab_size(vocab_size)
         .with_dropout(dropout)
         .with_num_heads(num_heads)
@@ -479,6 +503,8 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
         let mut optim_other = AdamW::new(other_params, ParamsAdamW { lr: 2e-4, ..Default::default() })?;
 
         println!("Iniciando entrenamiento...\n");
+        
+        model.print_architecture();
 
         let num_batches = num_actual_sequences.div_ceil(batch_size);
 

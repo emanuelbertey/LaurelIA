@@ -15,11 +15,12 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 use std::collections::HashSet;
-
+use std::time::Instant;
 use tokenizers::models::bpe::{BpeTrainerBuilder, BPE};
 use tokenizers::tokenizer::Tokenizer as HFTokenizer;
 use tokenizers::models::TrainerWrapper;
 use tokenizers::pre_tokenizers::metaspace::{Metaspace, PrependScheme};
+use tokenizers::AddedToken;
 
 use xlstm::{LstmType, XLstm, XLstmconfig, BlockType};
 use rand::Rng;
@@ -31,6 +32,20 @@ pub struct Tokenizer {
 
 impl Tokenizer {
     pub fn from_text(text: &str, vocab_size: usize) -> Result<Self> {
+        // 1. Definir los tokens especiales
+        let special_tokens_strings = vec![
+            "[ENG]".to_string(),
+            "[SEP]".to_string(),
+            "[ESP]".to_string(),
+            "[EOS]".to_string(),
+            "<PAD>".to_string(),
+        ];
+
+        let special_tokens: Vec<AddedToken> = special_tokens_strings
+            .iter()
+            .map(|t| AddedToken::from(t, true))
+            .collect();
+
         let model = BPE::builder()
             .byte_fallback(true)
             .build()
@@ -38,6 +53,7 @@ impl Tokenizer {
 
         let mut tokenizer = HFTokenizer::new(model);
 
+        // Configurar Metaspace (el carácter '_' visual para espacios)
         tokenizer.with_pre_tokenizer(Some(Metaspace::new(
             ' ',
             PrependScheme::Always,
@@ -48,20 +64,28 @@ impl Tokenizer {
         alphabet.insert('\n');
         alphabet.insert(' ');
 
+        // 2. Configurar el Trainer con los Special Tokens
         let trainer = BpeTrainerBuilder::default()
             .show_progress(true)
             .vocab_size(vocab_size)
-            .min_frequency(0)
+            .min_frequency(2) // Subimos a 2 para evitar tokens basura
             .initial_alphabet(alphabet)
+            .special_tokens(special_tokens.clone()) // <--- VITAL
             .build();
 
         let mut trainer_wrapper = TrainerWrapper::from(trainer);
 
+        // 3. Entrenar
         let temp_file = "temp_train.txt";
         fs::write(temp_file, text)?;
         tokenizer.train_from_files(&mut trainer_wrapper, vec![temp_file.to_string()])
             .map_err(|e| anyhow::anyhow!(e))?;
         fs::remove_file(temp_file)?;
+
+        // 4. Registrar los tokens en el tokenizador
+        for token in special_tokens_strings {
+            tokenizer.add_special_tokens(&[AddedToken::from(token, true)]);
+        }
 
         Ok(Self { tokenizer })
     }
@@ -305,24 +329,23 @@ fn generate_text(
 
     Ok(current_text)
 }
-
 fn main() -> Result<()> {
-    println!("xLSTM (mLSTM) Text Generation con Tokenizador (Candle)");
-    println!("====================================================\n");
+    println!("xLSTM Text Generation con Tokenizador (Candle)");
+    println!("======================================\n");
 
     let args: Vec<String> = std::env::args().collect();
     
     if args.len() < 2 {
-        eprintln!("Uso: cargo run --bin mlstmchat -- <archivo.txt>");
-        eprintln!("Ejemplo: cargo run --bin mlstmchat -- input.txt");
+        eprintln!("Uso: cargo run --bin xlstmchat -- <archivo.txt>");
+        eprintln!("Ejemplo: cargo run --bin xlstmchat -- input.txt");
         std::process::exit(1);
     }
 
     let text_file = &args[1];
     let tokenizer_path = "tokenizer_mlstm.json";
-    let model_path = "xlstm_chat_model_mlstm.safetensors";
+    let model_path = "mlstm_chat.safetensors";
 
-    let target_vocab_size = 2048;
+    let target_vocab_size = 1024;
 
     let tokenizer = if Path::new(tokenizer_path).exists() {
         println!("Cargando tokenizador existente...");
@@ -369,13 +392,13 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
     let num_layers = 1;
     let num_blocks = 1;
     let output_size = vocab_size; 
-    let dropout = 0.1;
+    let dropout = 0.05;
 
-    let seq_length = 256; 
-    let batch_size = 16; 
-    let stride = 64;     
+    let seq_length = 128; 
+    let batch_size = 8; 
+    let stride = seq_length;     
     let num_epochs = 50;
-    let num_heads = 4;
+    let num_heads = 2;
 
     println!("Configuración del modelo:");
     println!("  Bloques: {}", num_blocks);
@@ -386,12 +409,12 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
 
     let device = Device::Cpu;
 
-     let config = XLstmconfig::new(hidden_size, hidden_size, num_layers, num_blocks, output_size)
+     let config = XLstmconfig::new(vocab_size, hidden_size, num_layers, num_blocks, output_size)
         .with_vocab_size(vocab_size)
         .with_dropout(dropout)
         .with_num_heads(num_heads)
         .with_lstm_type(LstmType::MLSTM)
-        .with_use_projection(true);   
+        .with_use_projection(true);  
 
     let model_file_path = Path::new(model_path);
     let existe_modelo = model_file_path.exists();
@@ -473,9 +496,6 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
         }
         drop(data); // release lock before training
 
-
-        model.print_architecture();
-
         // Tasas de aprendizaje recomendadas para xLSTM: 
         // sLSTM suele tolerar LRs más altas, mLSTM requiere más cuidado.
         let mut optim_slstm = AdamW::new(slstm_params, ParamsAdamW { lr: 2e-4, ..Default::default() })?;
@@ -483,6 +503,8 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
         let mut optim_other = AdamW::new(other_params, ParamsAdamW { lr: 2e-4, ..Default::default() })?;
 
         println!("Iniciando entrenamiento...\n");
+        
+        model.print_architecture();
 
         let num_batches = num_actual_sequences.div_ceil(batch_size);
 
@@ -491,9 +513,9 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
             let mut num_losses = 0;
             let mut correct = 0;
             let mut total = 0;
-
+           // let mut current_state = None;
             for batch_idx in 0..num_batches {
-                
+                let epoch_start = Instant::now();
                 let current_batch_start_seq = batch_idx * batch_size;
                 let current_batch_size = (batch_size).min(num_actual_sequences - current_batch_start_seq);
 
@@ -509,9 +531,15 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
                     &device,
                 )?;
 
+                if batch_idx == 0 {
+                // Hacemos un forward silencioso para llenar las matrices del mLSTM
+               // let (_, warm_state) = model.forward(&input_batch, None)?;
+                //current_state = Some(warm_state.into_iter().map(|s| s.map(|state| state.detach())).collect());
+                println!("> Estado inicializado con éxito en el Batch 0");
+            }
 
-               // let (logits, _) = model.forward(&input_batch, None)?;
-                let (logits, _) = model.forward(&input_batch,  None)?;
+                let (logits, _) = model.forward(&input_batch, None)?;
+                //let (logits, next_state) = model.forward(&input_batch, current_state)?;
                 //current_state = Some(next_state.into_iter().map(|s| s.map(|state| state.detach())).collect());
                 //current_state = Some(next_state);
 
@@ -545,10 +573,11 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
                 optim_mlstm.step(&grads)?;
                 optim_other.step(&grads)?;
 
-                if batch_idx % 10 == 0 || batch_idx == num_batches - 1 {
-                    print!("\r  -> Batch [{}/{}] Loss: {:.4} Acc: {:.2}%", 
+                if batch_idx % 1 == 0 || batch_idx == num_batches - 1 {
+                    let elapsed = epoch_start.elapsed().as_secs_f32();
+                    print!("\r  -> Batch [{}/{}] Loss: {:.4} Acc: {:.2}% ({:.1}s)", 
                         batch_idx + 1, num_batches, total_loss / (num_losses as f32),
-                        100.0 * correct as f32 / total as f32);
+                        100.0 * correct as f32 / total as f32, elapsed);
                     io::stdout().flush().unwrap();
                 }
             }

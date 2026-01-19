@@ -15,7 +15,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 use std::collections::HashSet;
-
+use std::time::Instant;
 use tokenizers::models::bpe::{BpeTrainerBuilder, BPE};
 use tokenizers::tokenizer::Tokenizer as HFTokenizer;
 use tokenizers::models::TrainerWrapper;
@@ -369,13 +369,13 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
     let num_layers = 1;
     let num_blocks = 3;
     let output_size = vocab_size; 
-    let dropout = 0.1;
+    let dropout = 0.05;
 
     let seq_length = 128; 
-    let batch_size = 16; 
-    let stride = 64;     
+    let batch_size = 8; 
+    let stride = seq_length;     
     let num_epochs = 50;
-    let num_heads = 2;
+    let num_heads = 4;
 
     println!("Configuración del modelo:");
     println!("  Bloques: {}", num_blocks);
@@ -490,9 +490,9 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
             let mut num_losses = 0;
             let mut correct = 0;
             let mut total = 0;
-            let mut current_state = None;
+            //let mut current_state = None;
             for batch_idx in 0..num_batches {
-                
+                let epoch_start = Instant::now();
                 let current_batch_start_seq = batch_idx * batch_size;
                 let current_batch_size = (batch_size).min(num_actual_sequences - current_batch_start_seq);
 
@@ -510,16 +510,16 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
 
                 if batch_idx == 0 {
                 // Hacemos un forward silencioso para llenar las matrices del mLSTM
-                let (_, warm_state) = model.forward(&input_batch, None)?;
-                current_state = Some(warm_state.into_iter().map(|s| s.map(|state| state.detach())).collect());
+                //let (_, warm_state) = model.forward(&input_batch, None)?;
+                //current_state = Some(warm_state.into_iter().map(|s| s.map(|state| state.detach())).collect());
                 println!("> Estado inicializado con éxito en el Batch 0");
-            }
+            } 
 
-               // let (logits, _) = model.forward(&input_batch, None)?;
-                let (logits, next_state) = model.forward(&input_batch, current_state)?;
-                current_state = Some(next_state.into_iter().map(|s| s.map(|state| state.detach())).collect());
-                //current_state = Some(next_state);
-
+                 let (logits, _) = model.forward(&input_batch, None)?;
+                //let (logits, next_state) = model.forward(&input_batch, current_state)?;
+                //current_state = Some(next_state.into_iter().map(|s| s.map(|state| state.detach())).collect());
+                //current_state = Some(next_state); 
+ 
 
                 // Optimization
                 let logits_flat = logits.reshape((current_batch_size * seq_length, vocab_size))?;
@@ -550,10 +550,11 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
                 optim_mlstm.step(&grads)?;
                 optim_other.step(&grads)?;
 
-                if batch_idx % 10 == 0 || batch_idx == num_batches - 1 {
-                    print!("\r  -> Batch [{}/{}] Loss: {:.4} Acc: {:.2}%", 
+                if batch_idx % 5 == 0 || batch_idx == num_batches - 1 {
+                    let elapsed = epoch_start.elapsed().as_secs_f32();
+                    print!("\r  -> Batch [{}/{}] Loss: {:.4} Acc: {:.2}% ({:.1}s)", 
                         batch_idx + 1, num_batches, total_loss / (num_losses as f32),
-                        100.0 * correct as f32 / total as f32);
+                        100.0 * correct as f32 / total as f32, elapsed*5.0);
                     io::stdout().flush().unwrap();
                 }
             }
