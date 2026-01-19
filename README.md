@@ -13,6 +13,13 @@ The project has been fully ported from **Python** and the **Burn** framework to 
 *   **Performance with Candle**: Optimized using the Candle deep learning framework in Rust for fast inference and training.
 *   **Scientific Compliance**: The implementation is built to respect the official xLSTM paper specifications as closely as possible.
 
+## Screenshots
+
+| Main Window | Help Window |
+| :---: | :---: |
+| ![Main Window](img/main.PNG) | ![Help Window](img/help.PNG) |
+
+
 ## Getting Started
 
 1.  **Preparation**: Ensure you have the `xlstm_chat_model.safetensors` and `tokenizer.json` files in the root directory.
@@ -38,6 +45,13 @@ El proyecto ha sido portado completamente de **Python** y el framework **Burn** 
 *   **Interfaz de Chatbot**: Diseñado para tareas conversacionales y procesamiento de lenguaje natural general.
 *   **Rendimiento con Candle**: Optimizado utilizando el framework Candle en Rust para una inferencia y entrenamiento rápidos.
 *   **Cumplimiento Científico**: La implementación está construida para respetar las especificaciones del paper oficial de xLSTM lo más fielmente posible.
+
+## Capturas de pantalla
+
+| Ventana Principal | Ventana de Ayuda |
+| :---: | :---: |
+| ![Ventana Principal](img/main.PNG) | ![Ventana de Ayuda](img/help.PNG) |
+
 
 ## Cómo empezar
 
