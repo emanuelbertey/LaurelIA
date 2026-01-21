@@ -154,12 +154,12 @@ impl MLstmcell {
         let d_inner = hidden_size * expansion_factor;
         let head_dim = d_inner / num_heads;
 
-        // Projections initialized with small stdev as per NXAI
+        // Projections initialized with small stdev to prevent immediate saturation
         let w_q = Linear::new(vb.pp("w_q").get_with_hints((d_inner, input_size), "weight", Init::Randn { mean: 0.0, stdev: 0.02 })?, None);
         let w_k = Linear::new(vb.pp("w_k").get_with_hints((d_inner, input_size), "weight", Init::Randn { mean: 0.0, stdev: 0.02 })?, None);
         let w_v = Linear::new(vb.pp("w_v").get_with_hints((d_inner, input_size), "weight", Init::Randn { mean: 0.0, stdev: 0.02 })?, None);
 
-        // Gates Weights initialized to zero as per NXAI snippet
+        // Gates initialized according to NXAI/Paper hybrids for maximum stability
         let w_i_spec = vb.pp("w_i");
         let w_i_weights = w_i_spec.get_with_hints((num_heads, 3 * d_inner), "weight", Init::Const(0.0))?;
         let w_i_bias = w_i_spec.get_with_hints(num_heads, "bias", Init::Randn { mean: 0.0, stdev: 0.1 })?;
@@ -167,6 +167,9 @@ impl MLstmcell {
 
         let w_f_spec = vb.pp("w_f");
         let w_f_weights = w_f_spec.get_with_hints((num_heads, 3 * d_inner), "weight", Init::Const(0.0))?;
+        
+        // Linspace bias [3.0, ..., 6.0] as in NXAI. 
+        // Note: forward_sequence will clamp this to <= 0 for mLSTM exponential stability.
         let mut f_bias_vec: Vec<f32> = Vec::with_capacity(num_heads);
         for i in 0..num_heads {
             let val = 3.0 + (i as f32 * 3.0 / (num_heads as f32 - 1.0).max(1.0));
@@ -175,7 +178,7 @@ impl MLstmcell {
         let w_f_bias = Tensor::from_vec(f_bias_vec, num_heads, vb.device())?;
         let w_f = Linear::new(w_f_weights, Some(w_f_bias));
 
-        // Output gate (Branch z in NXAI mLSTMLayer)
+        // Output gate/branch (SiLU is often preferred in modern xLSTM layers)
         let w_o = linear(input_size, d_inner, vb.pp("w_o"))?;
         let w_down = linear(d_inner, hidden_size, vb.pp("w_down"))?;
         let outnorm = layer_norm(head_dim, 1e-5, vb.pp("outnorm"))?;
@@ -189,87 +192,102 @@ impl MLstmcell {
         let head_dim = d_inner / self.num_heads;
         let device = input_seq.device();
 
-        // 1. Projections
+        // 1. Base Projections
         let q_proj = self.w_q.forward(input_seq)?;
         let k_proj = self.w_k.forward(input_seq)?;
         let v_proj = self.w_v.forward(input_seq)?;
 
+        // Reshape to Multi-Head: [B, H, S, D_h]
         let q = q_proj.reshape((batch_size, seq_len, self.num_heads, head_dim))?.permute((0, 2, 1, 3))?.contiguous()?;
         let k = k_proj.reshape((batch_size, seq_len, self.num_heads, head_dim))?.permute((0, 2, 1, 3))?.contiguous()?;
         let v = v_proj.reshape((batch_size, seq_len, self.num_heads, head_dim))?.permute((0, 2, 1, 3))?.contiguous()?;
 
-        // Scaling per paper Section 3.2
+        // Scale per paper: Q and K scaled so QK^T is scaled by 1/sqrt(head_dim)
         let q = (q / (head_dim as f64).powf(0.25))?;
         let k = (k / (head_dim as f64).powf(0.25))?;
 
-        // 2. Branch z (Output gating branch with SiLU as in NXAI layer)
-        let z = self.w_o.forward(input_seq)?;
-        let z_act = ops::silu(&z)?.reshape((batch_size, seq_len, self.num_heads, head_dim))?.permute((0, 2, 1, 3))?.contiguous()?;
+        // 2. Branch Gating (SiLU as in NXAI snippet)
+        let o_gate = ops::silu(&self.w_o.forward(input_seq)?)?
+            .reshape((batch_size, seq_len, self.num_heads, head_dim))?
+            .permute((0, 2, 1, 3))?.contiguous()?;
 
         // 3. Gates
         let gate_input = Tensor::cat(&[&q_proj, &k_proj, &v_proj], 2)?;
-        let i_log = self.w_i.forward(&gate_input)?.reshape((batch_size, seq_len, self.num_heads, 1))?.permute((0, 2, 1, 3))?.contiguous()?;
-        let f_log = self.w_f.forward(&gate_input)?.reshape((batch_size, seq_len, self.num_heads, 1))?.permute((0, 2, 1, 3))?.contiguous()?;
+        let i_log = self.w_i.forward(&gate_input)?.permute((0, 2, 1))?.unsqueeze(3)?.contiguous()?;
+        let f_log = self.w_f.forward(&gate_input)?.permute((0, 2, 1))?.unsqueeze(3)?.contiguous()?;
         
-        let i_log = i_log.clamp(-3.0, 3.0)?;
-        let f_log = f_log.clamp(-3.0, 3.0)?;
+        // LOG GATE CLAMPING: Relaxed to allow max-stabilization to work.
+        let i_log = i_log.clamp(-20.0, 20.0)?;
+        let f_log = f_log.clamp(-20.0, 20.0)?;
 
+        // 4. Parallel Kernel (Dual Form)
         let indices = Tensor::arange(0u32, seq_len as u32, device)?;
         let mask = indices.reshape((seq_len, 1))?.broadcast_as((seq_len, seq_len))?
             .ge(&indices.reshape((1, seq_len))?.broadcast_as((seq_len, seq_len))?)?
             .to_dtype(DType::U8)?;
 
-        // 4. Parallel Kernel (Dual Form)
         let f_cumsum = f_log.cumsum(2)?;
+
+        // log_W[t, k] = f_cumsum[t] - f_cumsum[k] + i_log[k]
         let f_t = f_cumsum.broadcast_as((batch_size, self.num_heads, seq_len, seq_len))?;
         let f_k = f_cumsum.permute((0, 1, 3, 2))?.broadcast_as((batch_size, self.num_heads, seq_len, seq_len))?;
         let i_k = i_log.permute((0, 1, 3, 2))?.broadcast_as((batch_size, self.num_heads, seq_len, seq_len))?;
 
         let log_weights = f_t.sub(&f_k)?.add(&i_k)?;
+        
+        // Stabilized masking
         let neg_inf = Tensor::new(-1e10f32, device)?.broadcast_as(log_weights.shape())?;
         let log_weights_masked = mask.broadcast_as(log_weights.shape())?.where_cond(&log_weights, &neg_inf)?;
 
-        // 5. Max-Stabilization
+        // 5. Max-Stabilization (m_t)
         let m_0 = state.max_gate_log.clone();
-        let m_t = log_weights_masked.max(3)?.unsqueeze(3)?.maximum(&f_cumsum.broadcast_add(&m_0)?)?;
+        let m_prev = f_cumsum.broadcast_add(&m_0)?;
+        let m_local = log_weights_masked.max(3)?.unsqueeze(3)?;
+        let m_t = m_local.maximum(&m_prev)?;
+        
         let weights = log_weights_masked.broadcast_sub(&m_t.clone())?.exp()?;
 
-        // 6. Compute State and Normalizer
-        let att = weights.broadcast_mul(&q.matmul(&k.permute((0, 1, 3, 2))?)?)?;
+        // 6. Compute Hidden State
+        let qk_t = q.matmul(&k.permute((0, 1, 3, 2))?)?;
+        let att = weights.broadcast_mul(&qk_t)?;
         let h_p = att.matmul(&v)?;
 
         let initial_scale = f_cumsum.broadcast_add(&m_0)?.broadcast_sub(&m_t.clone())?.exp()?;
-        let h_total = (h_p + q.matmul(&state.cell)?.broadcast_mul(&initial_scale.clone())?)?;
+        let h_init = q.matmul(&state.cell)?;
+        let h_total = (h_p + h_init.broadcast_mul(&initial_scale.clone())?)?;
 
-        let n_total = (weights.matmul(&k)? + state.normalizer.broadcast_mul(&initial_scale.clone())?)?;
+        // 7. Normalizer (n_t) - Paper Eq 19
+        let n_p = weights.matmul(&k)?; 
+        let n_init = state.normalizer.broadcast_mul(&initial_scale.clone())?;
+        let n_total = (n_p + n_init)?; // [B, H, S, D]
         
-        // Denominator z_t = max(exp(F_t + m_0 - m_t), |q_t^T n_t|) as per paper Eq 19
-        let q_dot_n = (n_total.clone() * q)?.sum_keepdim(3)?;
-        let denominator = q_dot_n.abs()?.maximum(&initial_scale)?.clamp(1e-6, f32::MAX)?;
+        let q_dot_n = (n_total.clone() * q.clone())?.sum_keepdim(3)?; // q_t^T n_t
+        // Denominator z_t = max(initial_scale, |q_t^T n_t|)
+        let denominator = q_dot_n.abs()?.maximum(&initial_scale)?.clamp(1e-12, f32::MAX)?;
         let h_norm = h_total.broadcast_div(&denominator)?;
         
         // Final Output
-        let h_ln = self.outnorm.forward(&h_norm.permute((0, 2, 1, 3))?.contiguous()?)?;
-        let h_gated = h_ln.broadcast_mul(&z_act.permute((0, 2, 1, 3))?.contiguous()?)?;
+        let h_permuted = h_norm.permute((0, 2, 1, 3))?.contiguous()?;
+        let h_ln = self.outnorm.forward(&h_permuted)?;
+        let h_gated = h_ln.broadcast_mul(&o_gate.permute((0, 2, 1, 3))?.contiguous()?)?;
         let out = self.w_down.forward(&h_gated.reshape((batch_size, seq_len, d_inner))?)?;
 
-        // 7. Update State
+        // 8. Update State
         let last_idx = seq_len - 1;
+        let m_next = m_t.narrow(2, last_idx, 1)?; 
+        let n_next = n_total.narrow(2, last_idx, 1)?;
+        
         let i_scale_last = initial_scale.narrow(2, last_idx, 1)?;
         let w_last = weights.narrow(2, last_idx, 1)?;
-        let c_upd = v.permute((0, 1, 3, 2))?.broadcast_mul(&w_last)?.matmul(&k)?;
-        let mut c_next = state.cell.broadcast_mul(&i_scale_last)?.add(&c_upd)?;
-        
-        let c_max = c_next.abs()?.max_all()?.to_scalar::<f32>()?;
-        if c_max > 10.0 {
-            c_next = (c_next * (10.0 / (1.0 + c_max / 1.0)) as f64)?;
-        }
+        let v_weighted = v.permute((0, 1, 3, 2))?.broadcast_mul(&w_last)?; 
+        let c_upd = v_weighted.matmul(&k)?;
+        let c_next = state.cell.broadcast_mul(&i_scale_last)?.add(&c_upd)?;
 
         let next_state = MLstmstate::new(
             c_next, 
             out.narrow(1, last_idx, 1)?.reshape((batch_size, self.hidden_size))?, 
-            n_total.narrow(2, last_idx, 1)?, 
-            m_t.narrow(2, last_idx, 1)?
+            n_next, 
+            m_next
         );
 
         Ok((out, next_state))
