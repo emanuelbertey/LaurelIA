@@ -15,7 +15,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 use std::collections::HashSet;
-
+use std::time::Instant;
 use tokenizers::models::bpe::{BpeTrainerBuilder, BPE};
 use tokenizers::tokenizer::Tokenizer as HFTokenizer;
 use tokenizers::models::TrainerWrapper;
@@ -365,15 +365,15 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
     println!("Tokens totales: {}\n", tokens.len());
 
     let vocab_size = tokenizer.vocab_size();
-    let hidden_size = 256; 
+    let hidden_size = 480; 
     let num_layers = 1;
-    let num_blocks = 3;
+    let num_blocks = 6;
     let output_size = vocab_size; 
     let dropout = 0.1;
 
     let seq_length = 128; 
     let batch_size = 16; 
-    let stride = 64;     
+    let stride = 128;     
     let num_epochs = 50;
     let num_heads = 2;
 
@@ -479,6 +479,10 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
         let mut optim_mlstm = AdamW::new(mlstm_params, ParamsAdamW { lr: 8e-5, ..Default::default() })?;
         let mut optim_other = AdamW::new(other_params, ParamsAdamW { lr: 2e-4, ..Default::default() })?;
 
+
+        model.print_architecture();
+
+        
         println!("Iniciando entrenamiento...\n");
 
         let num_batches = num_actual_sequences.div_ceil(batch_size);
@@ -490,7 +494,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
             let mut total = 0;
             let mut current_state = None;
             for batch_idx in 0..num_batches {
-                
+                let epoch_start = Instant::now();
                 let current_batch_start_seq = batch_idx * batch_size;
                 let current_batch_size = (batch_size).min(num_actual_sequences - current_batch_start_seq);
 
@@ -546,13 +550,15 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
                 // Ahora los optimizadores usarán los gradientes clipeados
                 optim_slstm.step(&grads)?;
                 optim_mlstm.step(&grads)?;
-                optim_other.step(&grads)?;
+               // optim_other.step(&grads)?;
 
-                if batch_idx % 10 == 0 || batch_idx == num_batches - 1 {
-                    print!("\r  -> Batch [{}/{}] Loss: {:.4} Acc: {:.2}%", 
+                if batch_idx % 1 == 0 || batch_idx == num_batches - 1 {
+                    let elapsed = epoch_start.elapsed().as_secs_f32();
+                    print!("\r  -> Batch [{}/{}] Loss: {:.4} Acc: {:.2}% ({:.1}s)", 
                         batch_idx + 1, num_batches, total_loss / (num_losses as f32),
-                        100.0 * correct as f32 / total as f32);
+                        100.0 * correct as f32 / total as f32, elapsed);
                     io::stdout().flush().unwrap();
+                
                 }
             }
             println!();

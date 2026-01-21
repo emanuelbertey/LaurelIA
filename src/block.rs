@@ -174,7 +174,7 @@ impl XLstmblock {
         // Proyección de vuelta al tamaño del input residual
         let output = self.proj.forward(&output)?;
         // Dropout
-        let output = self.dropout.forward(&output, true)?;
+       // let output = self.dropout.forward(&output, true)?;
         // RESIDUAL CONNECTION
         let output = (output + input_seq)?;
 
