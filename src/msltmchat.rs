@@ -396,7 +396,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
     let model_file_path = Path::new(model_path);
     let existe_modelo = model_file_path.exists();
     
-    let mut continuar_entrenamiento = false;
+    let mut continuar_entrenamiento = true;
     if existe_modelo {
         print!("¿Deseas seguir entrenando el modelo cargado? (s/n): ");
         io::stdout().flush()?;
@@ -404,7 +404,9 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
         io::stdin().read_line(&mut input)?;
         if input.trim().to_lowercase() == "s" {
             continuar_entrenamiento = true;
-        }
+         }/* else {
+            continuar_entrenamiento = false;
+         }*/
     }
 
     let mut varmap = VarMap::new();
@@ -476,7 +478,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
         // Tasas de aprendizaje recomendadas para xLSTM: 
         // sLSTM suele tolerar LRs más altas, mLSTM requiere más cuidado.
         let mut optim_slstm = AdamW::new(slstm_params, ParamsAdamW { lr: 2e-4, ..Default::default() })?;
-        let mut optim_mlstm = AdamW::new(mlstm_params, ParamsAdamW { lr: 2e-4, ..Default::default() })?;
+        let mut optim_mlstm = AdamW::new(mlstm_params, ParamsAdamW { lr: 1e-5, ..Default::default() })?;
         let mut optim_other = AdamW::new(other_params, ParamsAdamW { lr: 2e-4, ..Default::default() })?;
 
 
