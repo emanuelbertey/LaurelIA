@@ -1,70 +1,48 @@
 /*
 # mLSTM: Matrix Long Short-Term Memory
-
-This module implements the mLSTM (matrix LSTM) cell and layer as described in the paper:
-"xLSTM: Extended Long Short-Term Memory" by Beck et al. (2024).
-
-The mLSTM extends the traditional LSTM by using a matrix memory state and exponential gating,
-allowing for enhanced storage capacities and improved performance on long-range dependencies.
+Implementación Dual Form Paralela Estable para Candle.
+Fiel al paper xLSTM (Beck et al. 2024) y referencias de NXAI.
 */
 
 use candle_core::{Tensor, Device, Result, DType};
-use candle_nn::{Dropout, Module, VarBuilder, Linear, LayerNorm, ops, linear_no_bias, layer_norm};
+use candle_nn::{Dropout, Module, VarBuilder, Linear, LayerNorm, ops, layer_norm, init::Init};
 
-/// State for mLSTM containing cell matrix and hidden state
+/// Estado del mLSTM para persistencia entre secuencias (Batch-to-Batch).
 #[derive(Clone, Debug)]
 pub struct MLstmstate {
-    /// Cell state - matrix of shape [`batch_size`, `num_heads`, `head_dim`, `head_dim`]
+    /// Memoria Matricial C_t: [B, NH, DH, DH]
     pub cell: Tensor,
-    /// Hidden state - vector of shape [`batch_size`, `hidden_size`]
-    pub hidden: Tensor,
-    /// Normalizer state - vector of shape [`batch_size`, `num_heads`, `head_dim`]
+    /// Normalizador Vectorial n_t: [B, NH, 1, DH]
     pub normalizer: Tensor,
-    /// Global max gate state for numeric stability - shape [`batch_size`, `num_heads`, 1]
+    /// Max-stabilizer m_t: [B, NH, 1, 1]
     pub max_gate_log: Tensor,
+    /// Placeholder para consistencia: [B, D_hidden]
+    pub hidden: Tensor,
 }
 
 impl MLstmstate {
-    /// Create a new mLSTM state
-    pub fn new(
-        cell: Tensor,
-        hidden: Tensor,
-        normalizer: Tensor,
-        max_gate_log: Tensor,
-    ) -> Self {
-        Self {
-            cell,
-            hidden,
-            normalizer,
-            max_gate_log,
-        }
+    pub fn new(cell: Tensor, normalizer: Tensor, max_gate_log: Tensor, hidden: Tensor) -> Self {
+        Self { cell, normalizer, max_gate_log, hidden }
     }
 
     pub fn detach(&self) -> Self {
         Self {
             cell: self.cell.detach(),
-            hidden: self.hidden.detach(),
             normalizer: self.normalizer.detach(),
             max_gate_log: self.max_gate_log.detach(),
+            hidden: self.hidden.detach(),
         }
     }
 }
 
-
-/// Configuration for mLSTM
 #[derive(Debug, Clone)]
 pub struct MLstmconfig {
-    /// Size of input features
     pub d_input: usize,
-    /// Size of hidden state
     pub d_hidden: usize,
-    /// Number of layers
     pub num_layers: usize,
-    /// Number of heads for multi-head mLSTM
     pub num_heads: usize,
-    /// Dropout probability
+    pub expansion_factor: usize,
     pub dropout: f32,
-    // Initializer is handled by VarBuilder/init logic
 }
 
 impl MLstmconfig {
@@ -74,8 +52,14 @@ impl MLstmconfig {
             d_hidden,
             num_layers,
             num_heads,
+            expansion_factor: 2,
             dropout: 0.0,
         }
+    }
+
+    pub fn with_expansion_factor(mut self, factor: usize) -> Self {
+        self.expansion_factor = factor;
+        self
     }
 
     pub fn with_dropout(mut self, dropout: f32) -> Self {
@@ -83,392 +67,195 @@ impl MLstmconfig {
         self
     }
 
-    /// Initialize a new mLSTM
     pub fn init(&self, vb: VarBuilder) -> Result<MLstm> {
         let mut layers = Vec::with_capacity(self.num_layers);
         for i in 0..self.num_layers {
             let input_size = if i == 0 { self.d_input } else { self.d_hidden };
-            let layer_vb = vb.pp(format!("layer_{}", i));
-            layers.push(MLstmcell::new(input_size, self.d_hidden, self.num_heads, layer_vb)?);
+            layers.push(MLstmcell::new(input_size, self.d_hidden, self.num_heads, self.expansion_factor, vb.pp(format!("layer_{}", i)))?);
         }
-
         Ok(MLstm {
             layers,
             dropout_layer: Dropout::new(self.dropout),
-            d_input: self.d_input,
             d_hidden: self.d_hidden,
             num_layers: self.num_layers,
-            num_heads: self.num_heads,
             dropout: self.dropout,
         })
     }
 }
 
-/// mLSTM layer implementation
 #[derive(Debug)]
 pub struct MLstm {
-    /// Stack of mLSTM cells
     pub layers: Vec<MLstmcell>,
-    /// Dropout module for inter-layer dropout
     pub dropout_layer: Dropout,
-    /// Input size
-    pub d_input: usize,
-    /// Hidden size
     pub d_hidden: usize,
-    /// Number of layers
     pub num_layers: usize,
-    /// Number of heads
-    pub num_heads: usize,
-    /// Dropout probability
     pub dropout: f32,
 }
 
 impl MLstm {
-    /// Forward pass through mLSTM consuming and returning states
-    pub fn forward(
-        &self,
-        input_seq: &Tensor,
-        states: Option<Vec<MLstmstate>>,
-    ) -> Result<(Tensor, Vec<MLstmstate>)> {
-        let (batch_size, _seq_length, _) = input_seq.dims3()?;
-        let device = input_seq.device();
-
-        // Inicializar estados
+    pub fn forward(&self, input_seq: &Tensor, states: Option<Vec<MLstmstate>>) -> Result<(Tensor, Vec<MLstmstate>)> {
+        let (batch_size, _, _) = input_seq.dims3()?;
         let mut hidden_states = match states {
             Some(s) => s,
-            None => self.init_hidden(batch_size, device)?,
+            None => self.init_hidden(batch_size, input_seq.device())?,
         };
-        
-        let mut layer_input = input_seq.clone();
-
-        for (layer_idx, layer) in self.layers.iter().enumerate() {
-            // mLSTM processes the entire sequence using the parallel kernel (Dual Form)
-            let old_state = &hidden_states[layer_idx];
-            
-            // We pass the full sequence
-            let (h_seq, new_state) = layer.forward_sequence(&layer_input, old_state)?;
-            
-            // Store the final state for future sequences (re-injecting continuity)
-            hidden_states[layer_idx] = new_state;
-
-            // Inter-layer Dropout
-            layer_input = if layer_idx < self.num_layers - 1 && self.dropout > 0.0 {
-                self.dropout_layer.forward(&h_seq, true)?
-            } else {
-                h_seq
-            };
+        let mut x = input_seq.clone();
+        for (i, layer) in self.layers.iter().enumerate() {
+            let (out, new_state) = layer.forward_sequence(&x, &hidden_states[i])?;
+            hidden_states[i] = new_state;
+            x = out;
+            if i < self.num_layers - 1 && self.dropout > 0.0 {
+                x = self.dropout_layer.forward(&x, true)?;
+            }
         }
-
-        Ok((layer_input, hidden_states))
+        Ok((x, hidden_states))
     }
 
-    /// Initialize hidden states
     fn init_hidden(&self, batch_size: usize, device: &Device) -> Result<Vec<MLstmstate>> {
-        let head_dim = self.d_hidden / self.num_heads;
-        
-        (0..self.num_layers)
-            .map(|_| {
-                Ok(MLstmstate::new(
-                    Tensor::zeros((batch_size, self.num_heads, head_dim, head_dim), DType::F32, device)?,
-                    Tensor::zeros((batch_size, self.d_hidden), DType::F32, device)?,
-                    Tensor::zeros((batch_size, self.num_heads, head_dim), DType::F32, device)?,
-                    Tensor::zeros((batch_size, self.num_heads, 1), DType::F32, device)?,
-                ))
-            })
-            .collect()
+        let cell = &self.layers[0];
+        let d_inner = cell.hidden_size * cell.expansion_factor;
+        let head_dim = d_inner / cell.num_heads;
+        (0..self.num_layers).map(|_| {
+            Ok(MLstmstate::new(
+                Tensor::zeros((batch_size, cell.num_heads, head_dim, head_dim), DType::F32, device)?,
+                Tensor::zeros((batch_size, cell.num_heads, 1, head_dim), DType::F32, device)?,
+                Tensor::zeros((batch_size, cell.num_heads, 1, 1), DType::F32, device)?,
+                Tensor::zeros((batch_size, cell.hidden_size), DType::F32, device)?,
+            ))
+        }).collect()
     }
 }
 
-/// mLSTM cell implementation with matrix memory
 #[derive(Debug)]
 pub struct MLstmcell {
-    /// Weight matrix for input to gates
-    pub weight_ih: Tensor,
-    /// Weight matrix for hidden to gates
-    pub weight_hh: Tensor,
-    /// Bias for gates
-    pub bias: Tensor,
-    /// Query projection
     pub w_q: Linear,
-    /// Key projection
     pub w_k: Linear,
-    /// Value projection
     pub w_v: Linear,
-    /// LayerNorm for multi-head normalization
-    pub ln: LayerNorm,
-    /// Input size
-    pub input_size: usize,
-    /// Hidden size
+    pub w_i: Linear,
+    pub w_f: Linear,
+    pub w_o: Linear,
+    pub w_down: Linear,
+    pub outnorm: LayerNorm,
     pub hidden_size: usize,
-    /// Number of heads
     pub num_heads: usize,
+    pub expansion_factor: usize,
 }
 
 impl MLstmcell {
-    pub fn new(
-        input_size: usize,
-        hidden_size: usize,
-        num_heads: usize,
-        vb: VarBuilder,
-    ) -> Result<Self> {
-        let weight_ih = vb.get_with_hints(
-            (3 * hidden_size, input_size), 
-            "weight_ih", 
-            candle_nn::init::DEFAULT_KAIMING_NORMAL 
-        )?;
-        
-        // weight_hh maintained for compatibility/sequential mode if needed
-        let weight_hh = vb.get_with_hints(
-            (3 * hidden_size, hidden_size), 
-            "weight_hh", 
-            candle_nn::init::DEFAULT_KAIMING_NORMAL
-        )?;
+    pub fn new(input_size: usize, hidden_size: usize, num_heads: usize, expansion_factor: usize, vb: VarBuilder) -> Result<Self> {
+        let d_inner = hidden_size * expansion_factor;
+        let head_dim = d_inner / num_heads;
 
-        // Bias init logic: Input=0, Forget=0.5.
-        // Candle's VarBuilder doesn't easily set arbitrary initial values unless loading from file.
-        // We will use 0.0 for now, as suggested for "Candle-way" simplicity.
-        // If we really need 0.5 for forget gate, we would need to load a tensor.
-        let bias = vb.get_with_hints(
-             3 * hidden_size, 
-             "bias",
-             candle_nn::init::Init::Const(0.0) 
-        )?;
+        // Kaiming Normal manual
+        let k_std = (1.0 / input_size as f64).sqrt();
+        let w_q = Linear::new(vb.pp("w_q").get_with_hints((d_inner, input_size), "weight", Init::Randn { mean: 0.0, stdev: k_std })?, None);
+        let w_k = Linear::new(vb.pp("w_k").get_with_hints((d_inner, input_size), "weight", Init::Randn { mean: 0.0, stdev: k_std })?, None);
+        let w_v = Linear::new(vb.pp("w_v").get_with_hints((d_inner, input_size), "weight", Init::Randn { mean: 0.0, stdev: k_std })?, None);
 
-        let head_dim = hidden_size / num_heads;
+        // Puertas directamente desde el input (Gradiente directo)
+        let w_i_spec = vb.pp("w_i");
+        let w_i = Linear::new(w_i_spec.get_with_hints((num_heads, input_size), "weight", Init::Const(0.0))?, Some(w_i_spec.get_with_hints(num_heads, "bias", Init::Randn { mean: 0.0, stdev: 0.1 })?));
 
-        // Q, K, V
-        let w_q = linear_no_bias(input_size, hidden_size, vb.pp("w_q"))?;
-        let w_k = linear_no_bias(input_size, hidden_size, vb.pp("w_k"))?;
-        let w_v = linear_no_bias(input_size, hidden_size, vb.pp("w_v"))?;
-        
-        let ln = layer_norm(head_dim, 1e-5, vb.pp("ln"))?;
+        let w_f_spec = vb.pp("w_f");
+        let mut f_bias_vec: Vec<f32> = Vec::with_capacity(num_heads);
+        for i in 0..num_heads { f_bias_vec.push(3.0 + (i as f32 * 3.0 / (num_heads as f32 - 1.0).max(1.0))); }
+        let w_f = Linear::new(w_f_spec.get_with_hints((num_heads, input_size), "weight", Init::Const(0.0))?, Some(Tensor::from_vec(f_bias_vec, num_heads, vb.device())?));
 
-        Ok(Self {
-            weight_ih,
-            weight_hh,
-            bias,
-            w_q,
-            w_k,
-            w_v,
-            ln,
-            input_size,
-            hidden_size,
-            num_heads,
-        })
+        // Proyecciones finales suaves para facilitar el flujo residual
+        let w_o = Linear::new(vb.pp("w_o").get_with_hints((d_inner, input_size), "weight", Init::Randn { mean: 0.0, stdev: 0.01 })?, Some(vb.pp("w_o").get_with_hints(d_inner, "bias", Init::Const(0.0))?));
+        let w_down = Linear::new(vb.pp("w_down").get_with_hints((hidden_size, d_inner), "weight", Init::Randn { mean: 0.0, stdev: 0.01 })?, Some(vb.pp("w_down").get_with_hints(hidden_size, "bias", Init::Const(0.0))?));
+        let outnorm = layer_norm(head_dim, 1e-5, vb.pp("outnorm"))?;
+
+        Ok(Self { w_q, w_k, w_v, w_i, w_f, w_o, w_down, outnorm, hidden_size, num_heads, expansion_factor })
     }
 
-    /// Forward pass through mLSTM cell consuming the state
-    pub fn forward_sequence(
-        &self,
-        input_seq: &Tensor,
-        state: &MLstmstate,
-    ) -> Result<(Tensor, MLstmstate)> {
+    pub fn forward_sequence(&self, input_seq: &Tensor, state: &MLstmstate) -> Result<(Tensor, MLstmstate)> {
         let (batch_size, seq_len, _) = input_seq.dims3()?;
-        let head_dim = self.hidden_size / self.num_heads;
+        let d_inner = self.hidden_size * self.expansion_factor;
+        let head_dim = d_inner / self.num_heads;
         let device = input_seq.device();
 
-        // 1. Parallel Projections (Q, K, V)
-        // input_seq: [B, S, D_in]
-        // w_q(input): [B, S, D_h] -> reshape [B, S, H, D_head] -> transpose(1,2) -> [B, H, S, D_head]
-        let q = self.w_q.forward(input_seq)?
-            .reshape((batch_size, seq_len, self.num_heads, head_dim))?
-            .permute((0, 2, 1, 3))? // [B, H, S, D_h]
-            .contiguous()?;
-        let k = self.w_k.forward(input_seq)?
-            .reshape((batch_size, seq_len, self.num_heads, head_dim))?
-            .permute((0, 2, 1, 3))?
-            .contiguous()?;
-        let v = self.w_v.forward(input_seq)?
-            .reshape((batch_size, seq_len, self.num_heads, head_dim))?
-            .permute((0, 2, 1, 3))?
-            .contiguous()?;
+        // 1. Proyecciones Q, K, V
+        let q_proj = self.w_q.forward(input_seq)?;
+        let k_proj = self.w_k.forward(input_seq)?;
+        let v_proj = self.w_v.forward(input_seq)?;
 
-        let scale = (head_dim as f64).sqrt();
+        let q = q_proj.reshape((batch_size, seq_len, self.num_heads, head_dim))?.permute((0, 2, 1, 3))?.contiguous()?;
+        let k = k_proj.reshape((batch_size, seq_len, self.num_heads, head_dim))?.permute((0, 2, 1, 3))?.contiguous()?;
+        let v = v_proj.reshape((batch_size, seq_len, self.num_heads, head_dim))?.permute((0, 2, 1, 3))?.contiguous()?;
+
+        // Escalado dh^-1/4 (Paper v2)
+        let scale = (head_dim as f64).powf(0.25);
         let q = (q / scale)?;
         let k = (k / scale)?;
-
-        // 2. Parallel Gates
-        // weight_ih: [3*D_h, D_in]. input: [B, S, D_in].
-        // input @ weight_ih^T = [B, S, 3*D_h]
-        // Flatten input for matmul: [B, S, D] -> [B*S, D]
-        let (batch_size, seq_len, _d_in) = input_seq.dims3()?;
-        let input_flat = input_seq.reshape((batch_size * seq_len, self.input_size))?;
         
-        let weight_ih_t = self.weight_ih.t()?.contiguous()?;
-        let gates_flat = input_flat.matmul(&weight_ih_t)?;
-        let gates = gates_flat.reshape((batch_size, seq_len, 3 * self.hidden_size))?
-            .broadcast_add(&self.bias.reshape((1, 1, 3 * self.hidden_size))?)?;
+        // 2. Puertas (Gradiente directo del input)
+        let i_log = self.w_i.forward(input_seq)?.reshape((batch_size, seq_len, self.num_heads, 1))?.permute((0, 2, 1, 3))?.clamp(-6.0, 6.0)?;
+        let f_log = self.w_f.forward(input_seq)?.reshape((batch_size, seq_len, self.num_heads, 1))?.permute((0, 2, 1, 3))?.clamp(-6.0, 0.0)?;
+        let o_gate = ops::silu(&self.w_o.forward(input_seq)?)?.reshape((batch_size, seq_len, self.num_heads, head_dim))?.permute((0, 2, 1, 3))?.contiguous()?;
+
+        // 3. Parallel Kernel (Dual Form)
+        let f_cumsum = f_log.cumsum(2)?;
+        let m_0 = state.max_gate_log.clone();
         
-        let chunks = gates.chunk(3, 2)?; // Chunk on last dim (dim 2)
+        // W[t, k] = f_cumsum[t] - f_cumsum[k] + i_log[k]
+        let f_t = f_cumsum.broadcast_as((batch_size, self.num_heads, seq_len, seq_len))?;
+        let f_k = f_cumsum.permute((0, 1, 3, 2))?.broadcast_as((batch_size, self.num_heads, seq_len, seq_len))?;
+        let i_k = i_log.permute((0, 1, 3, 2))?.broadcast_as((batch_size, self.num_heads, seq_len, seq_len))?;
+        let log_weight_gates = f_t.sub(&f_k)?.add(&i_k)?;
         
-        let i_log = chunks[0].clone()
-            .reshape((batch_size, seq_len, self.num_heads, head_dim))?
-            .permute((0, 2, 1, 3))? // [B, H, S, D_h]
-            .clamp(-6.0, 6.0)?;
-        let f_log = chunks[1].clone()
-            .reshape((batch_size, seq_len, self.num_heads, head_dim))?
-            .permute((0, 2, 1, 3))?
-            .clamp(-6.0, 6.0)?;
-        let o = ops::sigmoid(&chunks[2])?; // [B, S, D_hidden]
+        // Causal Masking
+        let indices = Tensor::arange(0u32, seq_len as u32, device)?;
+        let mask = indices.reshape((seq_len, 1))?.broadcast_as((seq_len, seq_len))?.ge(&indices.reshape((1, seq_len))?.broadcast_as((seq_len, seq_len))?)?.to_dtype(DType::U8)?;
+        let neg_inf = Tensor::new(-1e10f32, device)?.broadcast_as(log_weight_gates.shape())?;
+        let log_weight_masked = mask.broadcast_as(log_weight_gates.shape())?.where_cond(&log_weight_gates, &neg_inf)?;
 
-        let i_log_m = i_log.mean(3)?; // [B, H, S] (keep dim? Burn mean_dim keeps dim? No, usually reduces. Need to check strictly)
-        // Burn: mean_dim(3) returns [B, H, S, 1]. Candle mean returns reduced. We need unsqueeze.
-        let i_log_m = i_log_m.unsqueeze(3)?;
-        let f_log_m = f_log.mean(3)?.unsqueeze(3)?; // [B, H, S, 1]
+        // Max-Stabilization m_t
+        let m_prev = f_cumsum.broadcast_add(&m_0)?;
+        let m_local = log_weight_masked.max(3)?.unsqueeze(3)?;
+        let m_t = m_local.maximum(&m_prev.broadcast_as(m_local.shape())?)?;
+        let weights = log_weight_masked.broadcast_sub(&m_t.clone())?.exp()?;
 
-        // 3. Dual Form (Parallel Kernel)
-        // Create causal mask
-        // indices: [0..seq_len]
-        let indices = Tensor::arange(0u32, seq_len as u32, device)?; 
-        let row_idx = indices.reshape((seq_len, 1))?.broadcast_as((seq_len, seq_len))?;
-        let col_idx = indices.reshape((1, seq_len))?.broadcast_as((seq_len, seq_len))?;
-        let mask_tri = row_idx.ge(&col_idx)?.to_dtype(DType::F32)?; // 1 if row>=col (lower triangular)
+        // h_p = (weights * (Q @ K^T)) @ V
+        let qk_t = q.matmul(&k.permute((0, 1, 3, 2))?)?;
+        let h_p = weights.broadcast_mul(&qk_t)?.matmul(&v)?;
 
-        // f_cumsum = mask_tri @ f_log_m
-        // mask_tri: [S, S]. f_log_m: [B, H, S, 1].
-        // We broadcast mask_tri to [1, 1, S, S] or similar.
-        // f_log_m is treated as a batch of vectors?
-        // Wait, f_cumsum in original: mask_tri [1,1,S,S] matmul f_log_m [B,H,S,1] -> [B,H,S,1] ?
-        // [S, S] @ [S, 1] -> [S, 1]. Yes.
-        // So broadcast mask_tri. Or simply matmul.
-        // Candle matmul supports broadcasting? Yes.
-        let f_cumsum = mask_tri.broadcast_as((batch_size, self.num_heads, seq_len, seq_len))?
-            .matmul(&f_log_m)?; // [B, H, S, 1]
+        // Contribución de memoria anterior
+        let initial_scale = f_cumsum.broadcast_add(&m_0)?.broadcast_sub(&m_t.clone())?.exp()?;
+        let h_init = q.matmul(&state.cell)?;
+        let h_tilde = (h_p + h_init.broadcast_mul(&initial_scale.clone())?)?;
 
-        // log_weights calculation
-        // f_cumsum: [B, H, S, 1]. 
-        // We need log_weights over [B, H, S(target), S(source)].
-        // log_weights = f_cumsum - f_cumsum.transpose + i_log_m.transpose
-        // f_cumsum is per time step t (sum 0..t f).
-        // For attention: sum_{k=1..t} 
-        // Logic seems: w_{t,k} = exp( F_t - F_k + i_k )  (simplified)
-        // Original: f_cumsum.clone() - f_cumsum.clone().swap_dims(2, 3) + i_log_m.clone().swap_dims(2, 3)
-        // But f_cumsum is [B,H,S,1]. swap_dims(2,3) -> [B,H,1,S].
-        // [B,H,S,1] - [B,H,1,S] -> [B,H,S,S] (via broadcast)
-        // + [B,H,1,S] (i_log_m transposed) -> [B,H,S,S].
-        let f_cumsum_t = f_cumsum.permute((0, 1, 3, 2))?; // [B, H, 1, S]
-        let i_log_m_t = i_log_m.permute((0, 1, 3, 2))?;
-        let log_weights = f_cumsum.broadcast_sub(&f_cumsum_t)?
-            .broadcast_add(&i_log_m_t)?; // [B, H, S, S]
-
-        // Mask future
-        let mask_bool = mask_tri.to_dtype(DType::U8)?; // 1s and 0s
-        // mask_tri is 1 for valid. 0 for invalid (future).
-        // We want to fill INVALID (0) with -inf.
-        // log_weights = where(mask_tri == 1, log_weights, -inf)
-        // mask_bool is broadcast to [B, H, S, S]? Yes.
-        let min_val = -1e10f32;
-        // Candle: where_cond(mask (bool), on_true, on_false)
-        // Using broadcast mask.
-        let log_weights_masked = mask_bool.broadcast_as(log_weights.shape())?
-            .where_cond(&log_weights, &Tensor::new(min_val, device)?.broadcast_as(log_weights.shape())?)?;
-
-        // Global Max Stabilization (m_t)
-        // m_0: [B, H, 1, 1].
-        let m_0 = state.max_gate_log.reshape((batch_size, self.num_heads, 1, 1))?;
-        let m_initial = f_cumsum.broadcast_add(&m_0)?; // [B, H, S, 1] + [B, H, 1, 1] using broadcast
+        // 4. Normalizador Eq 19 (Denominador z_t)
+        let n_p = weights.matmul(&k)?; 
+        let n_init = state.normalizer.broadcast_mul(&initial_scale.clone())?;
+        let n_total = (n_p + n_init)?; 
         
-        // m_i_row = max over dim 3 (source time). [B, H, S, 1]
-        let m_i_row = log_weights_masked.max(3)?.unsqueeze(3)?;
-        // m_i = max(m_i_row, m_initial)
-        let m_i = m_i_row.maximum(&m_initial)?;
-
-        let m_i_stable = m_i.clamp(-10.0, 10.0)?;
+        let q_dot_n = (q.clone() * n_total.clone())?.sum_keepdim(3)?;
+        let denominator = q_dot_n.abs()?.clamp(1e-6, f32::MAX)?;
+        let h_norm = h_tilde.broadcast_div(&denominator)?;
         
-        let log_diff = log_weights_masked.broadcast_sub(&m_i_stable)?;
-        let weights = log_diff.clamp(-20.0, 0.0)?.exp()?;
+        // Output y Post-Gating
+        let h_ln = self.outnorm.forward(&h_norm.permute((0, 2, 1, 3))?.contiguous()?)?;
+        let h_gated = h_ln.broadcast_mul(&o_gate.permute((0, 2, 1, 3))?.contiguous()?)?;
+        let out = self.w_down.forward(&h_gated.reshape((batch_size, seq_len, d_inner))?)?;
 
-        // Parallel Hidden State
-        // q: [B, H, S, D]. k: [B, H, S, D].
-        // k.transpose -> [B, H, D, S].
-        // q @ k^T -> [B, H, S, S].
-        let kt = k.permute((0, 1, 3, 2))?.contiguous()?; 
-        let q_k_t = q.matmul(&kt)?; 
+        // 5. Update State (Batch-to-Batch persistence)
+        let last_idx = seq_len - 1;
+        let m_next = m_t.narrow(2, last_idx, 1)?;
+        let n_next = n_total.narrow(2, last_idx, 1)?;
         
-        // weights * q_k_t -> elementwise.
-        // USO DE BROADCAST_MUL (Evita el error de mismatch) 
-        // En lugar de: let w_q_k_t = (&weights * q_k_t)?; 
-        let w_q_k_t = weights.broadcast_mul(&q_k_t)?; // [B, H, S, S]
-        
-        // @ v -> [B, H, S, S] @ [B, H, S, D] -> [B, H, S, D]
-        let h_parallel = w_q_k_t.matmul(&v.contiguous()?)?;
+        // C_next = i_scale * C_prev + (v_last @ k_last^T)
+        // Aplicamos el input gate a la actualización
+        let i_scale_last = initial_scale.narrow(2, last_idx, 1)?;
+        let v_last = v.narrow(2, last_idx, 1)?.transpose(2, 3)?;
+        let k_last = k.narrow(2, last_idx, 1)?;
+        let i_last = i_log.narrow(2, last_idx, 1)?.exp()?;
+        let c_upd = v_last.matmul(&k_last.broadcast_mul(&i_last)?)?;
+        let c_next = state.cell.broadcast_mul(&i_scale_last)?.add(&c_upd)?;
 
-        // Initial State Contribution
-        // initial_scale = exp(f_cumsum + m_0 - m_i_stable)
-        let initial_scale = f_cumsum
-            .broadcast_add(&m_0)?
-            .broadcast_sub(&m_i_stable)?
-            .exp()?
-            .clamp(0.0, 1e10)?; // [B, H, S, 1]
-        // cell: [B, H, D, D]. q: [B, H, S, D].
-        // q @ cell -> [B, H, S, D]
-        let h_initial_base = q.matmul(&state.cell)?;
-        let h_initial = h_initial_base.broadcast_mul(&initial_scale)?;
+        // Captura del hidden state persistente (último elemento)
+        let hidden_persist = out.narrow(1, last_idx, 1)?.reshape((batch_size, self.hidden_size))?;
 
-        let h_heads = (h_parallel + h_initial)?;
-
-        // Normalizer
-        // n_parallel = weights @ k. [B, H, S, S] @ [B, H, S, D] -> [B, H, S, D]
-        let n_parallel = weights.matmul(&k.contiguous()?)?;
-        // n_initial = normalizer * initial_scale
-        // normalizer: [B, H, D] -> [B, H, 1, D] broadcast to [S]
-        let n_initial_base = state.normalizer.reshape((batch_size, self.num_heads, 1, head_dim))?
-            .broadcast_as((batch_size, self.num_heads, seq_len, head_dim))?;
-        let n_initial = n_initial_base.broadcast_mul(&initial_scale)?;
-        
-       // let n_heads = (n_parallel + n_initial)?.clamp(1e-6, f32::MAX)?; // clamp_min
-
-        // MHLN
-        //let h_normalized = (h_heads / (n_heads.clone() + 1e-5)?)?; 
-       
-       
-       
-       let n_heads = (n_parallel + n_initial)?.clamp(1.0, f32::MAX)?; 
-       let h_normalized = (h_heads / n_heads.clone())?; // <--- Añade .clone() aquí
-
-        // Layernorm expects [B, S, D] or similar last dim.
-        // h_normalized: [B, H, S, D_h].
-        // Swap to [B, S, H, D_h] then reshape?
-        // Original LayerNorm forward expects one vector? No, Layernorm works on last dim.
-        // But here we want elementwise or per head?
-        // The original Burn code: swap_dims(1,2) -> [B, S, H, D]. ln.forward(h_reshaped).
-        let h_reshaped = h_normalized.permute((0, 2, 1, 3))?.contiguous()?; // [B, S, H, D_h]
-        let h_ln = self.ln.forward(&h_reshaped)?; // Works if LN dim matches D_h?
-        // Wait, LN config is `head_dim`. So it normalizes the last dimension. Correct.
-       
-        let h_combined = h_ln.reshape((batch_size, seq_len, self.hidden_size))?;
-        let h_seq = ((o * h_combined)?.clamp(-10.0, 10.0))?;
-
-        // 5. Update State (Final T) 
-        let last_idx = seq_len - 1; 
-        
-        // Usamos reshape para asegurar que no se pierdan dimensiones de batch/head 
-        let final_m = m_i_stable.narrow(2, last_idx, 1)?.reshape((batch_size, self.num_heads, 1))?; 
-        let final_norm = n_heads.narrow(2, last_idx, 1)?.reshape((batch_size, self.num_heads, head_dim))?; 
-
-        let last_initial_scale = initial_scale.narrow(2, last_idx, 1)?.reshape((batch_size, self.num_heads, 1, 1))?; 
-        let final_cell_initial = state.cell.broadcast_mul(&last_initial_scale)?; 
-        
-        let last_row_weights = weights.narrow(2, last_idx, 1)?; // [B, H, 1, S] 
-        
-        // ACA ESTABA EL ERROR: Usamos broadcast_mul en vez de * 
-        let weight_permuted = last_row_weights.permute((0, 1, 3, 2))?.contiguous()?; // [B, H, S, 1] 
-        let v_weighted = v.broadcast_mul(&weight_permuted)?; // [B, H, S, D] 
-        
-        // Matmul final para actualizar la matriz de memoria 
-        let v_weighted_t = v_weighted.permute((0, 1, 3, 2))?.contiguous()?; // [B, H, D, S] 
-        let final_cell_update = v_weighted_t.matmul(&k.contiguous()?)?; // [B, H, D, D] 
-
-        let mut final_cell = (final_cell_initial + final_cell_update)?; 
- 
-         // Estabilización (Soft norm) - REMOVIDO PARA EVITAR CPU SYNC
-         // El escalado condicional con to_scalar() detiene la GPU. 
-         // Confiamos en la estabilización logarítmica (m_t) de xLSTM.
-         // Si es necesario, se puede usar un clamp fijo.
-         // final_cell = final_cell.clamp(-20.0, 20.0)?; 
- 
-         let final_hidden = h_seq.narrow(1, last_idx, 1)?.reshape((batch_size, self.hidden_size))?; 
- 
-         Ok((h_seq, MLstmstate::new(final_cell, final_hidden, final_norm, final_m)))
+        Ok((out, MLstmstate::new(c_next, n_next, m_next, hidden_persist)))
     }
 }
