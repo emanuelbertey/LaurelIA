@@ -172,7 +172,7 @@ impl SLstm {
             .map(|_| {
                 Ok(SLstmstate::new(
                     Tensor::zeros((batch_size, self.d_hidden), DType::F32, device)?,
-                    Tensor::zeros((batch_size, self.d_hidden), DType::F32, device)?,
+                    Tensor::ones((batch_size, self.d_hidden), DType::F32, device)?,
                     Tensor::zeros((batch_size, self.d_hidden), DType::F32, device)?,
                     Tensor::zeros((batch_size, self.d_hidden), DType::F32, device)?,
                 ))
@@ -275,4 +275,3 @@ impl SLstmcell {
         Ok((h_new, new_state))
     }
 }
-
