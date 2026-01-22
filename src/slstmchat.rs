@@ -318,8 +318,8 @@ fn main() -> Result<()> {
     }
 
     let text_file = &args[1];
-    let tokenizer_path = "tokenizer_slstm.json";
-    let model_path = "slstm_chat_model.safetensors";
+    let tokenizer_path = "tlitte.json";
+    let model_path = "lilitchat_model.safetensors";
 
     let target_vocab_size = 1024;
 
@@ -474,7 +474,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
 
         // Tasas de aprendizaje recomendadas para xLSTM: 
         // sLSTM suele tolerar LRs más altas, mLSTM requiere más cuidado.
-        let mut optim_slstm = AdamW::new(slstm_params, ParamsAdamW { lr: 2e-4, ..Default::default() })?;
+        let mut optim_slstm = AdamW::new(slstm_params, ParamsAdamW { lr: 3e-3, ..Default::default() })?;
         let mut optim_mlstm = AdamW::new(mlstm_params, ParamsAdamW { lr: 8e-5, ..Default::default() })?;
         let mut optim_other = AdamW::new(other_params, ParamsAdamW { lr: 2e-4, ..Default::default() })?;
 
@@ -487,7 +487,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
             let mut num_losses = 0;
             let mut correct = 0;
             let mut total = 0;
-            let mut current_state = None;
+          // let mut current_state = None;
             for batch_idx in 0..num_batches {
                 let epoch_start = Instant::now();
                 let current_batch_start_seq = batch_idx * batch_size;
@@ -505,16 +505,16 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
                     &device,
                 )?;
 
-                if batch_idx == 0 {
+            /*   if batch_idx == 0 {
                 // Hacemos un forward silencioso para llenar las matrices del mLSTM
                 let (_, warm_state) = model.forward(&input_batch, None)?;
                 current_state = Some(warm_state.into_iter().map(|s| s.map(|state| state.detach())).collect());
                 println!("> Estado inicializado con éxito en el Batch 0");
-            }
+            }*/
 
-               // let (logits, _) = model.forward(&input_batch, None)?;
-                let (logits, next_state) = model.forward(&input_batch, current_state)?;
-                current_state = Some(next_state.into_iter().map(|s| s.map(|state| state.detach())).collect());
+                let (logits, _) = model.forward(&input_batch, None)?;
+              // let (logits, next_state) = model.forward(&input_batch, current_state)?;
+                //current_state = Some(next_state.into_iter().map(|s| s.map(|state| state.detach())).collect());
                 //current_state = Some(next_state);
 
 
@@ -544,7 +544,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
 
                 // Ahora los optimizadores usarán los gradientes clipeados
                 optim_slstm.step(&grads)?;
-               // optim_mlstm.step(&grads)?;
+                optim_mlstm.step(&grads)?;
                 optim_other.step(&grads)?;
 
                 if batch_idx % 1 == 0 || batch_idx == num_batches - 1 {
