@@ -154,9 +154,8 @@ impl MLstmcell {
         let v = self.w_v.forward(x)?.reshape((b_sz, seq_len, self.num_heads, self.head_dim))?.permute((0, 2, 1, 3))?.contiguous()?;
         
         // Log-gates (Eq. 25-26)
-        // CRITICAL: Clamping to prevent exponential explosion during initial training steps
-        let i_tilde = self.w_i.forward(x)?.reshape((b_sz, seq_len, self.num_heads, self.head_dim))?.permute((0, 2, 1, 3))?.clamp(-6.0, 6.0)?;
-        let f_tilde = self.w_f.forward(x)?.reshape((b_sz, seq_len, self.num_heads, self.head_dim))?.permute((0, 2, 1, 3))?.clamp(-6.0, 6.0)?;
+        let i_tilde = self.w_i.forward(x)?.reshape((b_sz, seq_len, self.num_heads, self.head_dim))?.permute((0, 2, 1, 3))?;
+        let f_tilde = self.w_f.forward(x)?.reshape((b_sz, seq_len, self.num_heads, self.head_dim))?.permute((0, 2, 1, 3))?;
         let o_gate = ops::sigmoid(&self.w_o.forward(x)?)?;
 
         // Gate scalars per head [B, H, S]

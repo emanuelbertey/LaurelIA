@@ -156,11 +156,11 @@ impl XLstmblock {
             
             // Caso mLSTM
             (LSTMVariant::MLSTM(lstm), Some(LSTMState::MLSTM(s))) => {
-                let (out, state) = lstm.forward(&norm_input, Some(s))?;
+                let (out, state) = lstm.forward(&input_seq, Some(s))?;
                 (out, Some(LSTMState::MLSTM(state)))
             }
             (LSTMVariant::MLSTM(lstm), None) => {
-                let (out, state) = lstm.forward(&norm_input, None)?;
+                let (out, state) = lstm.forward(&input_seq, None)?;
                 (out, Some(LSTMState::MLSTM(state)))
             }
 
@@ -169,8 +169,6 @@ impl XLstmblock {
             }
         };
 
-        // Activación GELU (común en xLSTM blocks para mayor no-linealidad)
-        //let output = lstm_output.gelu()?;
         // Proyección de vuelta al tamaño del input residual
         let output = self.proj.forward(&lstm_output)?;
         // Dropout
