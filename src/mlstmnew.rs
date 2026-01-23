@@ -319,8 +319,8 @@ fn main() -> Result<()> {
     }
 
     let text_file = &args[1];
-    let tokenizer_path = "tokenizer_mlstm.json";
-    let model_path = "xlstm_chat_model_mlstm.safetensors";
+    let tokenizer_path = "newmlstm.json";
+    let model_path = "newmlstm.safetensors";
 
     let target_vocab_size = 1024;
 
@@ -367,7 +367,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
     let vocab_size = tokenizer.vocab_size();
     let hidden_size = 256; 
     let num_layers = 1;
-    let num_blocks = 1;
+    let num_blocks = 2;
     let output_size = vocab_size; 
     let dropout = 0.05;
 
@@ -478,21 +478,22 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
         // Tasas de aprendizaje recomendadas para xLSTM: 
         // sLSTM suele tolerar LRs más altas, mLSTM requiere más cuidado.
         let mut optim_slstm = AdamW::new(slstm_params, ParamsAdamW { lr: 2e-4, ..Default::default() })?;
-       // let mut optim_mlstm = AdamW::new(mlstm_params, ParamsAdamW { lr: 8e-4, ..Default::default() })?;
+      //  let mut optim_mlstm = AdamW::new(mlstm_params, ParamsAdamW { lr: 8e-4, ..Default::default() })?;
         let mut optim_other = AdamW::new(other_params, ParamsAdamW { lr: 2e-4, ..Default::default() })?;
 
 
         model.print_architecture();
+
+
         let lr_max = 4e-4;
-        let lr_min = 1.5e-4;
+        let lr_min = 2e-4;//2.71e-4
         let mut aumentando = false; // Control de dirección
         let step_factor = 0.985;      // Qué tan rápido cambia
-        let mut current_lr = 4.5e-4;
+        let mut current_lr = 3.5e-4;
         let mut optim_mlstm = AdamW::new(mlstm_params.clone(), ParamsAdamW { 
             lr: current_lr, 
             ..Default::default() 
         })?;
-
 
         println!("Iniciando entrenamiento...\n");
 
@@ -503,7 +504,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
             let mut num_losses = 0;
             let mut correct = 0;
             let mut total = 0;
-            let mut current_state = None;
+           // let mut current_state = None;
             for batch_idx in 0..num_batches {
                 let epoch_start = Instant::now();
                 let current_batch_start_seq = batch_idx * batch_size;
@@ -521,17 +522,17 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
                     &device,
                 )?;
 
-                if batch_idx == 0 {
+              /*  if batch_idx == 0 {
                 // Hacemos un forward silencioso para llenar las matrices del mLSTM
                 let (_, warm_state) = model.forward(&input_batch, None)?;
                 current_state = Some(warm_state.into_iter().map(|s| s.map(|state| state.detach())).collect());
                 println!("> Estado inicializado con éxito en el Batch 0");
               }
-               
+               */
              
-              //  let (logits, _) = model.forward(&input_batch,  None)?;
-               let (logits, next_state) = model.forward(&input_batch, current_state)?;
-                current_state = Some(next_state.into_iter().map(|s| s.map(|state| state.detach())).collect());
+              let (logits, _) = model.forward(&input_batch,  None)?;
+             //  let (logits, next_state) = model.forward(&input_batch, current_state)?;
+              //  current_state = Some(next_state.into_iter().map(|s| s.map(|state| state.detach())).collect());
 
 
                 // Optimization
@@ -553,7 +554,12 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
 
                 let grads = loss.backward()?;
 
-                // Ahora los optimizadores usarán los gradientes
+                /* 
+                // --- GRADIENT CLIPPING (Sugerido para prevenir estancamiento) ---
+                // Para xLSTM es vital clipear gradientes debido a las funciones exponenciales
+                */
+
+                // Ahora los optimizadores usarán los gradientes clipeados
                 optim_slstm.step(&grads)?;
                 optim_mlstm.step(&grads)?;
                 optim_other.step(&grads)?;
@@ -566,8 +572,9 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
                     io::stdout().flush().unwrap();
                 
                 }
-            
-                 if batch_idx % 5 == 0 && batch_idx > 0 {
+
+
+               if batch_idx % 7 == 0 && batch_idx > 0 {
                     if aumentando {
                         current_lr /= step_factor; // Sube de a poco
                         if current_lr >= lr_max {

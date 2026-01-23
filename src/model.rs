@@ -239,7 +239,7 @@ impl XLstm {
         if let Some((linear, norm, _dropout)) = &self.input_projection {
             x = linear.forward(&x)?;
             x = norm.forward(&x)?;
-            x = x.gelu()?;
+           x = x.gelu()?;
            // x = dropout.forward(&x, true)?;
         }
 
@@ -257,7 +257,7 @@ impl XLstm {
         // Apply output head
         let (linear1, _dropout, linear2) = &self.output_head;
         x = linear1.forward(&x)?;
-        x = x.gelu()?;
+        //x = x.gelu()?;
       //  x = dropout.forward(&x, true)?;
         let output = linear2.forward(&x)?;
 
