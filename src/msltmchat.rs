@@ -375,7 +375,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
     let batch_size = 16; 
     let stride = 128;     
     let num_epochs = 50;
-    let num_heads = 1;
+    let num_heads = 4;
 
     println!("Configuración del modelo:");
     println!("  Bloques: {}", num_blocks);
@@ -488,7 +488,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
         let lr_min = 2.5e-4;
         let mut aumentando = false; // Control de dirección
         let step_factor = 0.985;      // Qué tan rápido cambia
-        let mut current_lr = 10.5e-4;
+        let mut current_lr = 6.5e-4;
         let mut optim_mlstm = AdamW::new(mlstm_params.clone(), ParamsAdamW { 
             lr: current_lr, 
             ..Default::default() 

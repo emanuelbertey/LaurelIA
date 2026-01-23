@@ -160,7 +160,9 @@ impl MLstmcell {
 
         // Gate scalars per head [B, H, S]
         let log_i = i_tilde.mean(3)?; 
-        let log_f = f_tilde.mean(3)?; 
+        // Apply sigmoid to ensure forget gate is in (0, 1), so log_f is negative (decay)
+        // We clamp to avoid -inf which would cause NaNs in cumsum difference
+        let log_f = ops::sigmoid(&f_tilde.mean(3)?)?.log()?.clamp(-30.0, 0.0)?;
         
         // 2. Parallel Exponential Gating (Dual Form)
         // Forget gate cumulative sum: s_i = sum_{j=1}^i log_f_j

@@ -138,58 +138,50 @@ pub struct XLstmblock {
 }
 
 impl XLstmblock {
-    /// Forward pass through xLSTM block
     pub fn forward(
         &self,
         input_seq: &Tensor,
         state: Option<LSTMState>,
     ) -> Result<(Tensor, Option<LSTMState>)> {
-        // PRE-NORM: Aplicamos LN al input antes de entrar a la capa LSTM
-     //   let norm_input = self.norm.forward(input_seq)?;
-     //println!("Dropout actual blok: {:.3}", self.dropout_prob);
+        
+        // 1. PRE-NORM: Vital para apilar muchos bloques. 
+        // Normalizamos los datos ANTES de que entren a la lógica pesada.
+        let x = self.norm.forward(input_seq)?;
+
+        // 2. DROPOUT INICIAL: Solo si es necesario sobre el input normalizado
         let x = if self.dropout_prob > 0.0 {
-            candle_nn::ops::dropout(&input_seq, self.dropout_prob)?
+            candle_nn::ops::dropout(&x, self.dropout_prob)?
         } else {
-            input_seq.clone()
+            x
         };
 
-
-
+        // 3. PASO POR LA VARIANTE (mLSTM o sLSTM)
         let (lstm_output, new_state) = match (&self.lstm, state) {
-            // Caso sLSTM
-            (LSTMVariant::SLSTM(lstm), Some(LSTMState::SLSTM(s))) => {
-                let (out, state) = lstm.forward(&x, Some(s))?;
+            (LSTMVariant::SLSTM(lstm), s) => {
+                let s_val = match s { Some(LSTMState::SLSTM(st)) => Some(st), _ => None };
+                let (out, state) = lstm.forward(&x, s_val)?;
                 (out, Some(LSTMState::SLSTM(state)))
             }
-            (LSTMVariant::SLSTM(lstm), None) => {
-                let (out, state) = lstm.forward(&x, None)?;
-                (out, Some(LSTMState::SLSTM(state)))
-            }
-            
-            // Caso mLSTM
-            (LSTMVariant::MLSTM(lstm), Some(LSTMState::MLSTM(s))) => {
-                let (out, state) = lstm.forward(&x, Some(s))?;
+            (LSTMVariant::MLSTM(lstm), s) => {
+                let s_val = match s { Some(LSTMState::MLSTM(st)) => Some(st), _ => None };
+                let (out, state) = lstm.forward(&x, s_val)?;
                 (out, Some(LSTMState::MLSTM(state)))
             }
-            (LSTMVariant::MLSTM(lstm), None) => {
-                let (out, state) = lstm.forward(&x, None)?;
-                (out, Some(LSTMState::MLSTM(state)))
-            }
-
-            _ => {
-                candle_core::bail!("Mismatched state and LSTM variant in XLstmblock");
-            }
+            _ => candle_core::bail!("Mismatched state/variant"),
         };
 
-        // Proyección de vuelta al tamaño del input residual
+        // 4. PROYECCIÓN Y DROPOUT DE SALIDA
         let output = self.proj.forward(&lstm_output)?;
-        // Dropout
-      //  let output = self.dropout.forward(&output, true)?;
-        // RESIDUAL CONNECTION
-        let output = (output + input_seq)?;
+        
+        // 5. RESIDUAL CONNECTION (Pre-Norm Style)
+        // Sumamos el resultado a 'input_seq' original (el que no fue normalizado)
+        // Esto crea el "highway" de gradientes limpio.
+       // let output = (output + input_seq)?;
+       let output = ((output * 0.1)? + input_seq)?;
 
         Ok((output, new_state))
     }
+
 
     /// Get the block type
     pub fn get_type(&self) -> BlockType {
