@@ -484,11 +484,11 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
 
 
         model.print_architecture();
-        let lr_max = 4e-4;
-        let lr_min = 2.5e-4;
+        let lr_max = 1e-3;
+        let lr_min = 6e-6;
         let mut aumentando = false; // Control de dirección
         let step_factor = 0.985;      // Qué tan rápido cambia
-        let mut current_lr = 6.5e-4;
+        let mut current_lr = 1e-4;
         let mut optim_mlstm = AdamW::new(mlstm_params.clone(), ParamsAdamW { 
             lr: current_lr, 
             ..Default::default() 

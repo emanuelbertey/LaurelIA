@@ -159,10 +159,24 @@ impl MLstmcell {
         let o_gate = ops::sigmoid(&self.w_o.forward(x)?)?;
 
         // Gate scalars per head [B, H, S]
+        // mean(3) reduces the D_head dimension, resulting in [B, H, S].
+        // This preserves the head dimension (dim 1), ensuring each head has its own gate.
         let log_i = i_tilde.mean(3)?; 
-        // Apply sigmoid to ensure forget gate is in (0, 1), so log_f is negative (decay)
-        // We clamp to avoid -inf which would cause NaNs in cumsum difference
-        let log_f = ops::sigmoid(&f_tilde.mean(3)?)?.log()?.clamp(-30.0, 0.0)?;
+
+        // Stable log-sigmoid for forget gate:
+        // log(sigmoid(x)) = -log(1 + exp(-x)) = -softplus(-x)
+        // We use the raw f_tilde (averaged over D_head to get scalar per head)
+        let f_gate_scalar = f_tilde.mean(3)?;
+        
+      /*  let log_f = f_gate_scalar.neg()?.broadcast_as(f_gate_scalar.shape())?
+            .exp()?.log_1p()?.neg()?;
+*/
+          let log_f = f_gate_scalar
+            .neg()?           // -x
+            .exp()?           // exp(-x)
+            .affine(1.0, 1.0)? // 1 + exp(-x)
+            .log()?           // log(1 + exp(-x))
+            .neg()?;          // -log(1 + exp(-x))  
         
         // 2. Parallel Exponential Gating (Dual Form)
         // Forget gate cumulative sum: s_i = sum_{j=1}^i log_f_j

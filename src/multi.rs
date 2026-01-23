@@ -365,9 +365,9 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
     println!("Tokens totales: {}\n", tokens.len());
 
     let vocab_size = tokenizer.vocab_size();
-    let hidden_size = 512; 
+    let hidden_size = 256; 
     let num_layers = 1;
-    let num_blocks = 4;
+    let num_blocks = 2;
     let output_size = vocab_size; 
     let  mut dropout = 0.0;
 
