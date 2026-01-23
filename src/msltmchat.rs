@@ -365,11 +365,11 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
     println!("Tokens totales: {}\n", tokens.len());
 
     let vocab_size = tokenizer.vocab_size();
-    let hidden_size = 256; 
+    let hidden_size = 512; 
     let num_layers = 1;
-    let num_blocks = 1;
+    let num_blocks = 3;
     let output_size = vocab_size; 
-    let dropout = 0.05;
+    let  mut dropout = 0.0;
 
     let seq_length = 128; 
     let batch_size = 16; 
@@ -396,7 +396,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
     let model_file_path = Path::new(model_path);
     let existe_modelo = model_file_path.exists();
     
-    let mut continuar_entrenamiento = true;
+    let mut continuar_entrenamiento = false;
     if existe_modelo {
         print!("¿Deseas seguir entrenando el modelo cargado? (s/n): ");
         io::stdout().flush()?;
@@ -411,7 +411,8 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
 
     let mut varmap = VarMap::new();
     let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
-    let model = config.init(vb)?;
+    //let model = config.init(vb)?;
+    let mut model = config.init(vb)?;
 
     if existe_modelo {
          if !continuar_entrenamiento {
@@ -484,10 +485,10 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
 
         model.print_architecture();
         let lr_max = 4e-4;
-        let lr_min = 1.5e-4;
+        let lr_min = 2.5e-4;
         let mut aumentando = false; // Control de dirección
         let step_factor = 0.985;      // Qué tan rápido cambia
-        let mut current_lr = 4.5e-4;
+        let mut current_lr = 10.5e-4;
         let mut optim_mlstm = AdamW::new(mlstm_params.clone(), ParamsAdamW { 
             lr: current_lr, 
             ..Default::default() 
@@ -497,7 +498,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
         println!("Iniciando entrenamiento...\n");
 
         let num_batches = num_actual_sequences.div_ceil(batch_size);
-
+        dropout = 0.008;
         for epoch in 0..num_epochs {
             let mut total_loss = 0.0f32;
             let mut num_losses = 0;
@@ -568,25 +569,37 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
                 }
             
                  if batch_idx % 5 == 0 && batch_idx > 0 {
+                    let factor = step_factor as f32; //  errores
+
                     if aumentando {
-                        current_lr /= step_factor; // Sube de a poco
+
+                        dropout /= factor;           // 1. Actualizamos la variable local
+                        model.dropout = dropout;     // 2. Se la pasamos al model
+                        current_lr /= step_factor; // El LR suele ser f64, está bien
                         if current_lr >= lr_max {
                             current_lr = lr_max;
-                            aumentando = false; // Toca techo, empieza a bajar
+                            aumentando = false; 
                         }
                     } else {
-                        current_lr *= step_factor; // Baja de a poco
+                            dropout *= factor;           // 1. Actualizamos la variable local 
+                        current_lr *= step_factor; 
                         if current_lr <= lr_min {
                             current_lr = lr_min;
-                            aumentando = true; // Toca fondo, empieza a subir
+                            aumentando = true; 
                         }
                     }
+                    dropout = dropout.clamp(0.001, 0.007);
+                    model.blocks.iter_mut().for_each(|b| b.dropout_prob = dropout);
+            
+                    println!(
+                        "\n[CYCLIC SCHEDULER] LR: {:.2e} | Dropout: {:.4} | Dirección: {}", 
+                        current_lr, 
+                       dropout, //
+                        if aumentando { "Sube ↑" } else { "Baja ↓" }
+                    );
+                } 
 
-//optim_mlstm.set_lr(current_lr);
-                    println!("\n[CYCLIC SCHEDULER] LR: {:.2e} | Dirección: {}", 
-                            current_lr, if aumentando { "Sube ↑" } else { "Baja ↓" });
-                }
-        optim_mlstm = AdamW::new(mlstm_params.clone(),ParamsAdamW {lr: current_lr,..Default::default() }  )?;
+                optim_mlstm = AdamW::new(mlstm_params.clone(),ParamsAdamW {lr: current_lr,..Default::default() }  )?;
                                         
             }
             println!();

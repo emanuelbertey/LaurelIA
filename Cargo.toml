@@ -28,16 +28,24 @@ name = "xlstm"
 path = "src/lib.rs"
 
 [[bin]]
-name = "main"
-path = "src/main.rs"
+name = "multi"
+path = "src/multi.rs"
 
 [[bin]]
 name = "mlstmchat"
 path = "src/msltmchat.rs"
 
 [[bin]]
+name = "mlstmnew"
+path = "src/mlstmnew.rs"
+
+[[bin]]
 name = "slstmchat"
 path = "src/slstmchat.rs"
+
+[[bin]]
+name = "2slstmchat"
+path = "src/slstmchat2.rs"
 
 
 [[bin]]

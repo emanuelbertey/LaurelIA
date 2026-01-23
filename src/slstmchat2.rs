@@ -20,6 +20,7 @@ use tokenizers::models::bpe::{BpeTrainerBuilder, BPE};
 use tokenizers::tokenizer::Tokenizer as HFTokenizer;
 use tokenizers::models::TrainerWrapper;
 use tokenizers::pre_tokenizers::metaspace::{Metaspace, PrependScheme};
+use tokenizers::AddedToken;
 
 use xlstm::{LstmType, XLstm, XLstmconfig, BlockType};
 use rand::Rng;
@@ -31,6 +32,20 @@ pub struct Tokenizer {
 
 impl Tokenizer {
     pub fn from_text(text: &str, vocab_size: usize) -> Result<Self> {
+        // 1. Definir los tokens especiales
+        let special_tokens_strings = vec![
+            "[ENG]".to_string(),
+            "[SEP]".to_string(),
+            "[ESP]".to_string(),
+            "[EOS]".to_string(),
+            "<PAD>".to_string(),
+        ];
+
+        let special_tokens: Vec<AddedToken> = special_tokens_strings
+            .iter()
+            .map(|t| AddedToken::from(t, true))
+            .collect();
+
         let model = BPE::builder()
             .byte_fallback(true)
             .build()
@@ -38,6 +53,7 @@ impl Tokenizer {
 
         let mut tokenizer = HFTokenizer::new(model);
 
+        // Configurar Metaspace (el carácter '_' visual para espacios)
         tokenizer.with_pre_tokenizer(Some(Metaspace::new(
             ' ',
             PrependScheme::Always,
@@ -48,20 +64,28 @@ impl Tokenizer {
         alphabet.insert('\n');
         alphabet.insert(' ');
 
+        // 2. Configurar el Trainer con los Special Tokens
         let trainer = BpeTrainerBuilder::default()
             .show_progress(true)
             .vocab_size(vocab_size)
-            .min_frequency(0)
+            .min_frequency(2) // Subimos a 2 para evitar tokens basura
             .initial_alphabet(alphabet)
+            .special_tokens(special_tokens.clone()) // <--- VITAL
             .build();
 
         let mut trainer_wrapper = TrainerWrapper::from(trainer);
 
+        // 3. Entrenar
         let temp_file = "temp_train.txt";
         fs::write(temp_file, text)?;
         tokenizer.train_from_files(&mut trainer_wrapper, vec![temp_file.to_string()])
             .map_err(|e| anyhow::anyhow!(e))?;
         fs::remove_file(temp_file)?;
+
+        // 4. Registrar los tokens en el tokenizador
+        for token in special_tokens_strings {
+            tokenizer.add_special_tokens(&[AddedToken::from(token, true)]);
+        }
 
         Ok(Self { tokenizer })
     }
@@ -290,7 +314,7 @@ fn generate_text(
         //let last_logits = output.narrow(1, seq_len - 1, 1)?
            // .squeeze(1)?; // [1, vocab_size]
 
-        let next_token = sample_from_logits(&last_logits, 0.7)?;
+        let next_token = sample_from_logits(&last_logits, 0.8)?;
 
         current_tokens.push(next_token);
         if let Some(t) = tokenizer.id_to_token(next_token) {
@@ -305,22 +329,21 @@ fn generate_text(
 
     Ok(current_text)
 }
-
 fn main() -> Result<()> {
-    println!("xLSTM (mLSTM) Text Generation con Tokenizador (Candle)");
-    println!("====================================================\n");
+    println!("xLSTM Text Generation con Tokenizador (Candle)");
+    println!("======================================\n");
 
     let args: Vec<String> = std::env::args().collect();
     
     if args.len() < 2 {
-        eprintln!("Uso: cargo run --bin mlstmchat -- <archivo.txt>");
-        eprintln!("Ejemplo: cargo run --bin mlstmchat -- input.txt");
+        eprintln!("Uso: cargo run --bin xlstmchat -- <archivo.txt>");
+        eprintln!("Ejemplo: cargo run --bin xlstmchat -- input.txt");
         std::process::exit(1);
     }
 
     let text_file = &args[1];
-    let tokenizer_path = "newmlstm.json";
-    let model_path = "newmlstm.safetensors";
+    let tokenizer_path = "2tlitte.json";
+    let model_path = "2lilitchat_model.safetensors";
 
     let target_vocab_size = 1024;
 
@@ -367,15 +390,15 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
     let vocab_size = tokenizer.vocab_size();
     let hidden_size = 256; 
     let num_layers = 1;
-    let num_blocks = 2;
+    let num_blocks = 3;
     let output_size = vocab_size; 
-    let mut dropout = 0.00;
+    let dropout = 0.0;
 
     let seq_length = 128; 
     let batch_size = 16; 
     let stride = 128;     
     let num_epochs = 50;
-    let num_heads = 1;
+    let num_heads = 2;
 
     println!("Configuración del modelo:");
     println!("  Bloques: {}", num_blocks);
@@ -390,7 +413,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
         .with_vocab_size(vocab_size)
         .with_dropout(dropout)
         .with_num_heads(num_heads)
-        .with_lstm_type(LstmType::MLSTM)
+        .with_lstm_type(LstmType::SLSTM) 
         .with_use_projection(true);   
 
     let model_file_path = Path::new(model_path);
@@ -404,14 +427,12 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
         io::stdin().read_line(&mut input)?;
         if input.trim().to_lowercase() == "s" {
             continuar_entrenamiento = true;
-         }/* else {
-            continuar_entrenamiento = false;
-         }*/
+        }
     }
 
     let mut varmap = VarMap::new();
     let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
-    let mut model = config.init(vb)?;
+    let model = config.init(vb)?;
 
     if existe_modelo {
          if !continuar_entrenamiento {
@@ -477,34 +498,20 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
 
         // Tasas de aprendizaje recomendadas para xLSTM: 
         // sLSTM suele tolerar LRs más altas, mLSTM requiere más cuidado.
-        let mut optim_slstm = AdamW::new(slstm_params, ParamsAdamW { lr: 2e-4, ..Default::default() })?;
-      //  let mut optim_mlstm = AdamW::new(mlstm_params, ParamsAdamW { lr: 8e-4, ..Default::default() })?;
+        let mut optim_slstm = AdamW::new(slstm_params, ParamsAdamW { lr: 12e-4, ..Default::default() })?;
+        let mut optim_mlstm = AdamW::new(mlstm_params, ParamsAdamW { lr: 8e-5, ..Default::default() })?;
         let mut optim_other = AdamW::new(other_params, ParamsAdamW { lr: 2e-4, ..Default::default() })?;
 
-
-        model.print_architecture();
-
-
-        let lr_max = 4e-4;
-        let lr_min = 2e-4;//2.71e-4
-        let mut aumentando = false; // Control de dirección
-        let step_factor = 0.985;      // Qué tan rápido cambia
-        let mut current_lr = 3.5e-4;
-        let mut optim_mlstm = AdamW::new(mlstm_params.clone(), ParamsAdamW { 
-            lr: current_lr, 
-            ..Default::default() 
-        })?;
-
         println!("Iniciando entrenamiento...\n");
-
+        model.print_architecture();
         let num_batches = num_actual_sequences.div_ceil(batch_size);
-        dropout = 0.02;
+
         for epoch in 0..num_epochs {
             let mut total_loss = 0.0f32;
             let mut num_losses = 0;
             let mut correct = 0;
             let mut total = 0;
-            let mut current_state = None;
+           // let mut current_state = None;
             for batch_idx in 0..num_batches {
                 let epoch_start = Instant::now();
                 let current_batch_start_seq = batch_idx * batch_size;
@@ -522,17 +529,17 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
                     &device,
                 )?;
 
-                if batch_idx == 0 {
+             /*  if batch_idx == 0 {
                 // Hacemos un forward silencioso para llenar las matrices del mLSTM
                 let (_, warm_state) = model.forward(&input_batch, None)?;
                 current_state = Some(warm_state.into_iter().map(|s| s.map(|state| state.detach())).collect());
                 println!("> Estado inicializado con éxito en el Batch 0");
-              }
-               
-             
-             // let (logits, _) = model.forward(&input_batch,  None)?;
-              let (logits, next_state) = model.forward(&input_batch, current_state)?;
-               current_state = Some(next_state.into_iter().map(|s| s.map(|state| state.detach())).collect());
+            }*/
+
+                let (logits, _) = model.forward(&input_batch, None)?;
+              //  let (logits, next_state) = model.forward(&input_batch, current_state)?;
+             //   current_state = Some(next_state.into_iter().map(|s| s.map(|state| state.detach())).collect());
+                //current_state = Some(next_state);
 
 
                 // Optimization
@@ -570,43 +577,8 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
                         batch_idx + 1, num_batches, total_loss / (num_losses as f32),
                         100.0 * correct as f32 / total as f32, elapsed);
                     io::stdout().flush().unwrap();
-                
+               
                 }
-
-
-               if batch_idx % 5 == 0 && batch_idx > 0 {
-                    let factor = step_factor as f32; //  errores
-
-                    if aumentando {
-
-                        dropout /= factor;           // 1. Actualizamos la variable local
-                        model.dropout = dropout;     // 2. Se la pasamos al model
-                        current_lr /= step_factor; // El LR suele ser f64, está bien
-                        if current_lr >= lr_max {
-                            current_lr = lr_max;
-                            aumentando = false; 
-                        }
-                    } else {
-                            dropout *= factor;           // 1. Actualizamos la variable local 
-                        current_lr *= step_factor; 
-                        if current_lr <= lr_min {
-                            current_lr = lr_min;
-                            aumentando = true; 
-                        }
-                    }
-                    dropout = dropout.clamp(0.005, 0.20);
-                    model.blocks.iter_mut().for_each(|b| b.dropout_prob = dropout);
-            
-                    println!(
-                        "\n[CYCLIC SCHEDULER] LR: {:.2e} | Dropout: {:.4} | Dirección: {}", 
-                        current_lr, 
-                       dropout, //
-                        if aumentando { "Sube ↑" } else { "Baja ↓" }
-                    );
-                } 
-
-        optim_mlstm = AdamW::new(mlstm_params.clone(),ParamsAdamW {lr: current_lr,..Default::default() }  )?;
-                                        
             }
             println!();
 

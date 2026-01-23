@@ -38,6 +38,7 @@ pub struct XLstmblockConfig {
     pub dropout: f32,
     /// Block type (sLSTM or mLSTM)
     pub block_type: BlockType,
+
 }
 
 impl XLstmblockConfig {
@@ -88,6 +89,7 @@ impl XLstmblockConfig {
             lstm,
             norm,
             dropout,
+            dropout_prob: self.dropout,
             proj,
         })
     }
@@ -131,6 +133,8 @@ pub struct XLstmblock {
     pub dropout: Dropout,
     /// Projection layer
     pub proj: Linear,
+        // dropout dinamico 
+    pub dropout_prob: f32,
 }
 
 impl XLstmblock {
@@ -141,26 +145,34 @@ impl XLstmblock {
         state: Option<LSTMState>,
     ) -> Result<(Tensor, Option<LSTMState>)> {
         // PRE-NORM: Aplicamos LN al input antes de entrar a la capa LSTM
-        let norm_input = self.norm.forward(input_seq)?;
+     //   let norm_input = self.norm.forward(input_seq)?;
+     //println!("Dropout actual blok: {:.3}", self.dropout_prob);
+        let x = if self.dropout_prob > 0.0 {
+            candle_nn::ops::dropout(&input_seq, self.dropout_prob)?
+        } else {
+            input_seq.clone()
+        };
+
+
 
         let (lstm_output, new_state) = match (&self.lstm, state) {
             // Caso sLSTM
             (LSTMVariant::SLSTM(lstm), Some(LSTMState::SLSTM(s))) => {
-                let (out, state) = lstm.forward(&norm_input, Some(s))?;
+                let (out, state) = lstm.forward(&x, Some(s))?;
                 (out, Some(LSTMState::SLSTM(state)))
             }
             (LSTMVariant::SLSTM(lstm), None) => {
-                let (out, state) = lstm.forward(&norm_input, None)?;
+                let (out, state) = lstm.forward(&x, None)?;
                 (out, Some(LSTMState::SLSTM(state)))
             }
             
             // Caso mLSTM
             (LSTMVariant::MLSTM(lstm), Some(LSTMState::MLSTM(s))) => {
-                let (out, state) = lstm.forward(&input_seq, Some(s))?;
+                let (out, state) = lstm.forward(&x, Some(s))?;
                 (out, Some(LSTMState::MLSTM(state)))
             }
             (LSTMVariant::MLSTM(lstm), None) => {
-                let (out, state) = lstm.forward(&input_seq, None)?;
+                let (out, state) = lstm.forward(&x, None)?;
                 (out, Some(LSTMState::MLSTM(state)))
             }
 

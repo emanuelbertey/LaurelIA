@@ -290,7 +290,7 @@ fn generate_text(
         //let last_logits = output.narrow(1, seq_len - 1, 1)?
            // .squeeze(1)?; // [1, vocab_size]
 
-        let next_token = sample_from_logits(&last_logits, 0.7)?;
+        let next_token = sample_from_logits(&last_logits, 0.8)?;
 
         current_tokens.push(next_token);
         if let Some(t) = tokenizer.id_to_token(next_token) {
@@ -319,8 +319,8 @@ fn main() -> Result<()> {
     }
 
     let text_file = &args[1];
-    let tokenizer_path = "newmlstm.json";
-    let model_path = "newmlstm.safetensors";
+    let tokenizer_path = "tokenizer_mlstm.json";
+    let model_path = "xlstm_chat_model_mlstm.safetensors";
 
     let target_vocab_size = 1024;
 
@@ -365,17 +365,17 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
     println!("Tokens totales: {}\n", tokens.len());
 
     let vocab_size = tokenizer.vocab_size();
-    let hidden_size = 256; 
+    let hidden_size = 512; 
     let num_layers = 1;
-    let num_blocks = 2;
+    let num_blocks = 4;
     let output_size = vocab_size; 
-    let mut dropout = 0.00;
+    let  mut dropout = 0.0;
 
     let seq_length = 128; 
     let batch_size = 16; 
     let stride = 128;     
     let num_epochs = 50;
-    let num_heads = 1;
+    let num_heads = 4;
 
     println!("Configuración del modelo:");
     println!("  Bloques: {}", num_blocks);
@@ -390,7 +390,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
         .with_vocab_size(vocab_size)
         .with_dropout(dropout)
         .with_num_heads(num_heads)
-        .with_lstm_type(LstmType::MLSTM)
+        .with_lstm_type(LstmType::SLSTM)
         .with_use_projection(true);   
 
     let model_file_path = Path::new(model_path);
@@ -411,6 +411,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
 
     let mut varmap = VarMap::new();
     let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+    //let model = config.init(vb)?;
     let mut model = config.init(vb)?;
 
     if existe_modelo {
@@ -478,27 +479,26 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
         // Tasas de aprendizaje recomendadas para xLSTM: 
         // sLSTM suele tolerar LRs más altas, mLSTM requiere más cuidado.
         let mut optim_slstm = AdamW::new(slstm_params, ParamsAdamW { lr: 2e-4, ..Default::default() })?;
-      //  let mut optim_mlstm = AdamW::new(mlstm_params, ParamsAdamW { lr: 8e-4, ..Default::default() })?;
+       // let mut optim_mlstm = AdamW::new(mlstm_params, ParamsAdamW { lr: 8e-4, ..Default::default() })?;
         let mut optim_other = AdamW::new(other_params, ParamsAdamW { lr: 2e-4, ..Default::default() })?;
 
 
         model.print_architecture();
-
-
         let lr_max = 4e-4;
-        let lr_min = 2e-4;//2.71e-4
+        let lr_min = 2.5e-4;
         let mut aumentando = false; // Control de dirección
         let step_factor = 0.985;      // Qué tan rápido cambia
-        let mut current_lr = 3.5e-4;
+        let mut current_lr = 6.5e-4;
         let mut optim_mlstm = AdamW::new(mlstm_params.clone(), ParamsAdamW { 
             lr: current_lr, 
             ..Default::default() 
         })?;
 
+
         println!("Iniciando entrenamiento...\n");
 
         let num_batches = num_actual_sequences.div_ceil(batch_size);
-        dropout = 0.02;
+        dropout = 0.008;
         for epoch in 0..num_epochs {
             let mut total_loss = 0.0f32;
             let mut num_losses = 0;
@@ -530,9 +530,9 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
               }
                
              
-             // let (logits, _) = model.forward(&input_batch,  None)?;
-              let (logits, next_state) = model.forward(&input_batch, current_state)?;
-               current_state = Some(next_state.into_iter().map(|s| s.map(|state| state.detach())).collect());
+              //  let (logits, _) = model.forward(&input_batch,  None)?;
+               let (logits, next_state) = model.forward(&input_batch, current_state)?;
+                current_state = Some(next_state.into_iter().map(|s| s.map(|state| state.detach())).collect());
 
 
                 // Optimization
@@ -554,12 +554,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
 
                 let grads = loss.backward()?;
 
-                /* 
-                // --- GRADIENT CLIPPING (Sugerido para prevenir estancamiento) ---
-                // Para xLSTM es vital clipear gradientes debido a las funciones exponenciales
-                */
-
-                // Ahora los optimizadores usarán los gradientes clipeados
+                // Ahora los optimizadores usarán los gradientes
                 optim_slstm.step(&grads)?;
                 optim_mlstm.step(&grads)?;
                 optim_other.step(&grads)?;
@@ -572,9 +567,8 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
                     io::stdout().flush().unwrap();
                 
                 }
-
-
-               if batch_idx % 5 == 0 && batch_idx > 0 {
+            
+                 if batch_idx % 5 == 0 && batch_idx > 0 {
                     let factor = step_factor as f32; //  errores
 
                     if aumentando {
@@ -594,7 +588,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
                             aumentando = true; 
                         }
                     }
-                    dropout = dropout.clamp(0.005, 0.20);
+                    dropout = dropout.clamp(0.001, 0.007);
                     model.blocks.iter_mut().for_each(|b| b.dropout_prob = dropout);
             
                     println!(
@@ -605,7 +599,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
                     );
                 } 
 
-        optim_mlstm = AdamW::new(mlstm_params.clone(),ParamsAdamW {lr: current_lr,..Default::default() }  )?;
+                optim_mlstm = AdamW::new(mlstm_params.clone(),ParamsAdamW {lr: current_lr,..Default::default() }  )?;
                                         
             }
             println!();

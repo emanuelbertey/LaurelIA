@@ -368,7 +368,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
     let num_layers = 1;
     let num_blocks = 3;
     let output_size = vocab_size; 
-    let dropout = 0.1;
+    let dropout = 0.0;
 
     let seq_length = 128; 
     let batch_size = 16; 
@@ -474,7 +474,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
 
         // Tasas de aprendizaje recomendadas para xLSTM: 
         // sLSTM suele tolerar LRs más altas, mLSTM requiere más cuidado.
-        let mut optim_slstm = AdamW::new(slstm_params, ParamsAdamW { lr: 2e-4, ..Default::default() })?;
+        let mut optim_slstm = AdamW::new(slstm_params, ParamsAdamW { lr: 6e-3, ..Default::default() })?;
         let mut optim_mlstm = AdamW::new(mlstm_params, ParamsAdamW { lr: 8e-5, ..Default::default() })?;
         let mut optim_other = AdamW::new(other_params, ParamsAdamW { lr: 2e-4, ..Default::default() })?;
 
