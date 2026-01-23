@@ -1,30 +1,30 @@
 /*!
 # sLSTM: Scalar Long Short-Term Memory
+Implementation according to: "xLSTM: Extended Long Short-Term Memory" (2405.04517v2)
 
-This module implements the sLSTM (scalar LSTM) cell and layer as described in the paper:
-"xLSTM: Extended Long Short-Term Memory" by Beck et al. (2024).
-
-The sLSTM extends the traditional LSTM by using exponential gating and a new memory mixing technique.
+The sLSTM (Scalar LSTM) extends the traditional LSTM with:
+1. Exponential gating with a log-space max-stabilizer (m_t).
+2. Normalization (n_t) of the cell state to maintain boundedness.
+3. Memory mixing via the hidden-to-state recurrent connection.
 */
 
 use candle_core::{Tensor, Device, Result, DType};
 use candle_nn::{Dropout, VarBuilder, ops};
 
-/// State for sLSTM containing cell and hidden states
+/// State for sLSTM containing cell, normalizer, hidden, and stabilizer states
 #[derive(Clone, Debug)]
 pub struct SLstmstate {
-    /// Cell state
+    /// Cell state (c_t)
     pub cell: Tensor,
-    /// Normalizer state (for stable exponential gating)
+    /// Normalizer state (n_t)
     pub normalizer: Tensor,
-    /// Hidden state
+    /// Hidden state (h_t)
     pub hidden: Tensor,
-    /// Stabilizer state (log-space max tracker)
+    /// Stabilizer state (m_t: tracking the maximum gate logit)
     pub stabilizer: Tensor,
 }
 
 impl SLstmstate {
-    /// Create a new sLSTM state
     pub fn new(
         cell: Tensor,
         normalizer: Tensor,
@@ -52,14 +52,10 @@ impl SLstmstate {
 /// Configuration for sLSTM
 #[derive(Debug, Clone)]
 pub struct SLstmconfig {
-    /// Size of input features
     pub d_input: usize,
-    /// Size of hidden state
     pub d_hidden: usize,
-    /// Number of layers
     pub num_layers: usize,
-    /// Dropout probability
-    pub dropout: f32, // Candle uses f32
+    pub dropout: f32,
 }
 
 impl SLstmconfig {
@@ -77,12 +73,11 @@ impl SLstmconfig {
         self
     }
 
-    /// Initialize a new sLSTM
     pub fn init(&self, vb: VarBuilder) -> Result<SLstm> {
         let mut layers = Vec::with_capacity(self.num_layers);
         for i in 0..self.num_layers {
             let input_size = if i == 0 { self.d_input } else { self.d_hidden };
-            let layer_vb = vb.pp(format!("layer_{}", i)); // Make sure to structure keys correctly
+            let layer_vb = vb.pp(format!("layer_{}", i));
             layers.push(SLstmcell::new(input_size, self.d_hidden, layer_vb)?);
         }
 
@@ -97,25 +92,18 @@ impl SLstmconfig {
     }
 }
 
-/// sLSTM layer implementation
+/// sLSTM layer stack implementation
 #[derive(Debug)]
 pub struct SLstm {
-    /// Stack of sLSTM cells
     pub layers: Vec<SLstmcell>,
-    /// Dropout module for inter-layer dropout
     pub dropout_layer: Dropout,
-    /// Input size
     pub d_input: usize,
-    /// Hidden size
     pub d_hidden: usize,
-    /// Number of layers
     pub num_layers: usize,
-    /// Dropout probability
     pub dropout: f32,
 }
 
 impl SLstm {
-    /// Forward pass through sLSTM consuming and returning states
     pub fn forward(
         &self,
         input_seq: &Tensor,
@@ -124,7 +112,6 @@ impl SLstm {
         let (batch_size, seq_length, _) = input_seq.dims3()?;
         let device = input_seq.device();
 
-        // Initialize or consume provided states
         let mut hidden_states = match states {
             Some(s) => s,
             None => self.init_hidden(batch_size, device)?,
@@ -134,20 +121,12 @@ impl SLstm {
 
         for t in 0..seq_length {
             let input_t = input_seq.narrow(1, t, 1)?.squeeze(1)?;
-
             let mut layer_input = input_t;
 
             for (layer_idx, layer) in self.layers.iter().enumerate() {
-                // Take current state components
-                let old_state = &hidden_states[layer_idx];
-                
-                // Consume the state and get new state back
-                let (h_new, new_state) = layer.forward(&layer_input, old_state)?;
-
-                // Update state
+                let (h_new, new_state) = layer.forward(&layer_input, &hidden_states[layer_idx])?;
                 hidden_states[layer_idx] = new_state;
 
-                // Apply dropout between layers (but not after last layer)
                 layer_input = if layer_idx < self.num_layers - 1 && self.dropout > 0.0 {
                     self.dropout_layer.forward(&h_new, true)? 
                 } else {
@@ -162,17 +141,13 @@ impl SLstm {
         Ok((output, hidden_states))
     }
 
-    /// Initialize hidden states
-    fn init_hidden(
-        &self,
-        batch_size: usize,
-        device: &Device,
-    ) -> Result<Vec<SLstmstate>> {
+    fn init_hidden(&self, batch_size: usize, device: &Device) -> Result<Vec<SLstmstate>> {
         (0..self.num_layers)
             .map(|_| {
                 Ok(SLstmstate::new(
                     Tensor::zeros((batch_size, self.d_hidden), DType::F32, device)?,
-                    Tensor::ones((batch_size, self.d_hidden), DType::F32, device)?,
+                    // xLSTM paper: n_0 = 0 (Equation 13 & 14 starting sum from 0)
+                    Tensor::zeros((batch_size, self.d_hidden), DType::F32, device)?,
                     Tensor::zeros((batch_size, self.d_hidden), DType::F32, device)?,
                     Tensor::zeros((batch_size, self.d_hidden), DType::F32, device)?,
                 ))
@@ -181,18 +156,13 @@ impl SLstm {
     }
 }
 
-/// sLSTM cell implementation with exponential gating
+/// sLSTM cell implementation with Exponential Gating (Eq. 15-20)
 #[derive(Debug)]
 pub struct SLstmcell {
-    /// Weight matrix for input to gates
     pub weight_ih: Tensor,
-    /// Weight matrix for hidden to gates
     pub weight_hh: Tensor,
-    /// Bias for gates
     pub bias: Tensor,
-    /// Input size
     pub input_size: usize,
-    /// Hidden size
     pub hidden_size: usize,
 }
 
@@ -202,6 +172,7 @@ impl SLstmcell {
         hidden_size: usize,
         vb: VarBuilder, 
     ) -> Result<Self> {
+        // xLSTM paper suggests standard initialization for LSTM-like gates.
         let weight_ih = vb.get_with_hints(
             (4 * hidden_size, input_size), 
             "weight_ih", 
@@ -214,6 +185,7 @@ impl SLstmcell {
             candle_nn::init::DEFAULT_KAIMING_NORMAL
         )?;
 
+        // Bias 0.0 means e^0 = 1.0 initially for i and f gates.
         let bias = vb.get_with_hints(
             4 * hidden_size, 
             "bias", 
@@ -229,7 +201,7 @@ impl SLstmcell {
         })
     }
 
-    /// Forward pass through sLSTM cell consuming the state
+    /// Forward pass through sLSTM cell (Single Step)
     pub fn forward(
         &self,
         input: &Tensor,
@@ -242,34 +214,44 @@ impl SLstmcell {
             stabilizer,
         } = state;
 
-        // Compute all gates: i, f, g, o
-        // weight_ih: [4*H, I]. input: [B, I]. 
+        // 1. Projections for i, f, z, o gates [B, 4*H]
         let gates = input.matmul(&self.weight_ih.t()?)?
             .broadcast_add(&self.bias.unsqueeze(0)?)?
             .broadcast_add(&hidden.matmul(&self.weight_hh.t()?)?)?;
 
+        // 2. Gate separation (Assuming order: i, f, z, o)
         let chunks = gates.chunk(4, 1)?;
-        // Según xLSTM paper: i, f son exponenciales, g es tanh, o es sigmoid
-        // Aplicamos estabilización para evitar overflow
-        let i_gate = &chunks[0];
-        let f_gate = &chunks[1];
-        let g_gate = &chunks[2];
-        let o_gate = &chunks[3];
+        let i_gate = &chunks[0]; // Logit del Input gate
+        let f_gate = &chunks[1]; // Logit del Forget gate
+        let z_gate = &chunks[2]; // Logit del Input content (phi)
+        let o_gate = &chunks[3]; // Logit del Output gate (sigma)
 
+        // 3. Log-Space Max Stabilization (Eq. 18-19)
+        // m_t = max(f_gate + m_prev, i_gate)
         let m_prev_plus_f = stabilizer.add(f_gate)?;
         let m_new = m_prev_plus_f.maximum(i_gate)?; 
 
-        let i_exp = (i_gate - &m_new)?.clamp(-20.0, 0.0)?.exp()?;
-        let f_exp = (m_prev_plus_f - &m_new)?.clamp(-20.0, 0.0)?.exp()?;
+        // 4. Stabilized Exponential Gating
+        // i_t' = exp(i_gate - m_t)
+        // f_t' = exp(f_gate + m_prev - m_t)
+        let i_exp = (i_gate - &m_new)?.clamp(-30.0, 0.0)?.exp()?;
+        let f_exp = (m_prev_plus_f - &m_new)?.clamp(-30.0, 0.0)?.exp()?;
 
-        let g = g_gate.tanh()?;
-        let o = ops::sigmoid(o_gate)?;
+        // Activaciones no-exponenciales
+        let z = z_gate.tanh()?;      // Input content (z en el paper)
+        let o = ops::sigmoid(o_gate)?; // Output gate (sigma)
 
-        let c_new = ((&f_exp * cell)? + (&i_exp * g)?)?;
+        // 5. State Updates (Eq. 13-14)
+        // c_t = f_t' * c_prev + i_t' * z_t
+        // n_t = f_t' * n_prev + i_t'
+        let c_new = ((&f_exp * cell)? + (&i_exp * z)?)?;
         let n_new = ((f_exp * normalizer)? + i_exp)?;
 
+        // 6. Normalization and Output (Eq. 16-17)
+        // Hidden state h_t = o_t * (c_t / n_t)
+        // xLSTM paper: "The normalization ensures that h_t is bounded, making tanh unnecessary."
         let n_safe = n_new.clamp(1e-6, f32::MAX)?; 
-        let h_new = (o * (c_new.clone() / n_safe)?.tanh()?)?;
+        let h_new = (o * (c_new.clone() / n_safe)?)?;
 
         let new_state = SLstmstate::new(c_new, n_new, h_new.clone(), m_new);
         Ok((h_new, new_state))

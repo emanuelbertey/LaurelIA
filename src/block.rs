@@ -141,26 +141,26 @@ impl XLstmblock {
         state: Option<LSTMState>,
     ) -> Result<(Tensor, Option<LSTMState>)> {
         // PRE-NORM: Aplicamos LN al input antes de entrar a la capa LSTM
-      //  let norm_input = self.norm.forward(input_seq)?;
+        let norm_input = self.norm.forward(input_seq)?;
 
         let (lstm_output, new_state) = match (&self.lstm, state) {
             // Caso sLSTM
             (LSTMVariant::SLSTM(lstm), Some(LSTMState::SLSTM(s))) => {
-                let (out, state) = lstm.forward(&input_seq, Some(s))?;
+                let (out, state) = lstm.forward(&norm_input, Some(s))?;
                 (out, Some(LSTMState::SLSTM(state)))
             }
             (LSTMVariant::SLSTM(lstm), None) => {
-                let (out, state) = lstm.forward(&input_seq, None)?;
+                let (out, state) = lstm.forward(&norm_input, None)?;
                 (out, Some(LSTMState::SLSTM(state)))
             }
             
             // Caso mLSTM
             (LSTMVariant::MLSTM(lstm), Some(LSTMState::MLSTM(s))) => {
-                let (out, state) = lstm.forward(&input_seq, Some(s))?;
+                let (out, state) = lstm.forward(&norm_input, Some(s))?;
                 (out, Some(LSTMState::MLSTM(state)))
             }
             (LSTMVariant::MLSTM(lstm), None) => {
-                let (out, state) = lstm.forward(&input_seq, None)?;
+                let (out, state) = lstm.forward(&norm_input, None)?;
                 (out, Some(LSTMState::MLSTM(state)))
             }
 
@@ -170,9 +170,9 @@ impl XLstmblock {
         };
 
         // Activación GELU (común en xLSTM blocks para mayor no-linealidad)
-        let output = lstm_output.gelu()?;
+        //let output = lstm_output.gelu()?;
         // Proyección de vuelta al tamaño del input residual
-        let output = self.proj.forward(&output)?;
+        let output = self.proj.forward(&lstm_output)?;
         // Dropout
       //  let output = self.dropout.forward(&output, true)?;
         // RESIDUAL CONNECTION

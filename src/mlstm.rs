@@ -1,17 +1,26 @@
-/*
+/*!
 # mLSTM: Matrix Long Short-Term Memory
-Implementación oficial según: "xLSTM: Extended Long Short-Term Memory" (2405.04517v2)
-Sección 2.3 y Apéndice A.3 (Parallel Dual Form).
+Implementation according to: "xLSTM: Extended Long Short-Term Memory" (2405.04517v2)
+Section 2.3 and Appendix A.3 (Parallel Dual Form).
+
+The mLSTM replaces the scalar memory of a standard LSTM with a matrix memory (C_t),
+offering higher storage capacity. It uses:
+1. Multi-Head Structure (similar to Transformers).
+2. Covariance-like update for the memory matrix.
+3. Stabilized exponential gating for all-parallel computation.
 */
 
-use candle_core::{Tensor, Device, Result, DType};
+use candle_core::{Tensor, Result};
 use candle_nn::{Dropout, Module, VarBuilder, Linear, ops, linear};
 
-/// Estado para mLSTM (Matrix Memory)
+/// State for mLSTM (Matrix Memory)
 #[derive(Clone, Debug)]
 pub struct MLstmstate {
+    /// Matrix memory cell shape: [B, H, D_h, D_h]
     pub cell: Tensor,       
+    /// Normalizer state shape: [B, H, D_h]
     pub normalizer: Tensor, 
+    /// Last max logit for stability shape: [B, H, 1]
     pub m_t: Tensor,        
 }
 
@@ -133,35 +142,37 @@ impl MLstmcell {
         })
     }
 
-    /// Parallel Forward Pass (Ecuaciones 79-86)
-    pub fn forward_sequence(&self, x: &Tensor, _state_prev: Option<&MLstmstate>) -> Result<(Tensor, MLstmstate)> {
+    /// Parallel Forward Pass (Equations 79-86)
+    pub fn forward_sequence(&self, x: &Tensor, state_prev: Option<&MLstmstate>) -> Result<(Tensor, MLstmstate)> {
         let (b_sz, seq_len, _) = x.dims3()?;
         let dev = x.device();
 
-        // 1. Proyecciones
+        // 1. Projections (Q, K, V)
+        // Shapes: [B, H, S, D_h]
         let q = self.w_q.forward(x)?.reshape((b_sz, seq_len, self.num_heads, self.head_dim))?.permute((0, 2, 1, 3))?.contiguous()?;
         let k = self.w_k.forward(x)?.reshape((b_sz, seq_len, self.num_heads, self.head_dim))?.permute((0, 2, 1, 3))?.contiguous()?;
         let v = self.w_v.forward(x)?.reshape((b_sz, seq_len, self.num_heads, self.head_dim))?.permute((0, 2, 1, 3))?.contiguous()?;
         
-        // Log-gates exponenciales reales (Eq. 25-26)
-        // No aplicamos sigmoid para que el modelo pueda aprender de verdad.
-        let i_tilde = self.w_i.forward(x)?.reshape((b_sz, seq_len, self.num_heads, self.head_dim))?.permute((0, 2, 1, 3))?;
-        let f_tilde = self.w_f.forward(x)?.reshape((b_sz, seq_len, self.num_heads, self.head_dim))?.permute((0, 2, 1, 3))?;
+        // Log-gates (Eq. 25-26)
+        // CRITICAL: Clamping to prevent exponential explosion during initial training steps
+        let i_tilde = self.w_i.forward(x)?.reshape((b_sz, seq_len, self.num_heads, self.head_dim))?.permute((0, 2, 1, 3))?.clamp(-6.0, 6.0)?;
+        let f_tilde = self.w_f.forward(x)?.reshape((b_sz, seq_len, self.num_heads, self.head_dim))?.permute((0, 2, 1, 3))?.clamp(-6.0, 6.0)?;
         let o_gate = ops::sigmoid(&self.w_o.forward(x)?)?;
 
-        // Gate scalars per head
+        // Gate scalars per head [B, H, S]
         let log_i = i_tilde.mean(3)?; 
         let log_f = f_tilde.mean(3)?; 
         
-        // 2. Pesos de atención log-espacio Causal (Eq. 71-74, 101)
+        // 2. Parallel Exponential Gating (Dual Form)
+        // Forget gate cumulative sum: s_i = sum_{j=1}^i log_f_j
         let s = log_f.cumsum(2)?; 
         
-        // log_D[i, j] = log_i[j] + s[i] - s[j]
+        // log_D [B, H, S, S]: log_D[i, j] = log_i[j] + s[i] - s[j]
         let log_d = s.unsqueeze(3)? 
             .broadcast_sub(&s.unsqueeze(2)?)? 
             .broadcast_add(&log_i.unsqueeze(2)?)?; 
 
-        // Máscara Causal (U8 para Candle where_cond)
+        // Causal Masking
         let indices = Tensor::arange(0u32, seq_len as u32, dev)?;
         let mask = indices.reshape((seq_len, 1))?.broadcast_as((seq_len, seq_len))?
             .ge(&indices.reshape((1, seq_len))?.broadcast_as((seq_len, seq_len))?)?
@@ -170,36 +181,146 @@ impl MLstmcell {
         let neg_inf = Tensor::new(-1e10f32, dev)?.broadcast_as(log_d.shape())?;
         let log_d_masked = mask.broadcast_as(log_d.shape())?.where_cond(&log_d, &neg_inf)?;
 
-        // Stabilizer m_t (Eq. 80-81) para evitar overflow sin sacrificar potencia
-        let m = log_d_masked.max_keepdim(3)?; 
+        // Stabilizer m_t (Eq. 80-81) 
+        let m_current = log_d_masked.max_keepdim(3)?; // [B, H, S, 1]
+        
+        // m_initial = s_i + m_prev
+        let m = if let Some(state) = state_prev {
+            let m_prev = state.m_t.unsqueeze(2)?.broadcast_as((b_sz, self.num_heads, 1, 1))?; 
+            let m_initial = s.unsqueeze(3)?.broadcast_add(&m_prev)?;
+            m_initial.maximum(&m_current)?
+        } else {
+            m_current
+        };
+        
+        // Stabilized weights d_prime = exp(log_D - m)
         let d_prime = log_d_masked.broadcast_sub(&m)?.exp()?; 
 
-        // 3. Retrieval Paralelo (Eq. 82-86)
+        // 3. Retrieval (Eq. 82-86)
         let scale = Tensor::new((self.head_dim as f32).sqrt(), dev)?;
         let q_scaled = q.broadcast_div(&scale)?;
-        let qk_t = q_scaled.matmul(&k.transpose(2, 3)?)?;
         
+        // h_parallel = (D' @ V) ? No, we need the matrix form property:
+        // Proper parallel hidden state retrieval
+        let qk_t = q_scaled.matmul(&k.transpose(2, 3)?)?;
         let matrix_weights = qk_t.broadcast_mul(&d_prime)?;
         let h_raw = matrix_weights.matmul(&v)?; 
 
-        // Normalizador de Matrix Memory (Eq. 21 y 84)
-        // Usamos la cota inferior estabilizada para evitar la explosión.
-        let b = matrix_weights.sum_keepdim(3)?;
-        let n = b.abs()?.maximum(&(m.neg()?.exp()?))?;
+        // n_parallel = D' @ K
+        let n_vector_seq = matrix_weights.matmul(&k)?; // Vector normalizer [B, H, S, D_h]
+
+        // Handle initial state contribution
+        let (total_h_raw, total_n_vector) = if let Some(state) = state_prev {
+            // f_init = exp(s_i + m_prev - m_i)
+            let m_prev = state.m_t.unsqueeze(2)?.broadcast_as((b_sz, self.num_heads, 1, 1))?;
+            let f_initial = s.unsqueeze(3)?.broadcast_add(&m_prev)?.broadcast_sub(&m)?.exp()?;
+            
+            let h_initial = q_scaled.matmul(&state.cell)?.broadcast_mul(&f_initial)?;
+            let n_initial = state.normalizer.unsqueeze(2)?.broadcast_mul(&f_initial)?;
+            
+            ((h_raw + h_initial)?, (n_vector_seq + n_initial)?)
+        } else {
+            (h_raw, n_vector_seq)
+        };
+
+        // Retrieval Denominator: n_i^T @ q_i (Eq. 21)
+        let n_transpose_q = total_n_vector.broadcast_mul(&q_scaled)?.sum_keepdim(3)?;
+        let n_safe = n_transpose_q.abs()?.maximum(&(m.neg()?.exp()?))?;
         
-        let h_norm = h_raw.broadcast_div(&n)?; 
+        let h_norm = total_h_raw.broadcast_div(&n_safe)?;
 
-        // 4. Salida Proyectada
-        let h_out = h_norm.permute((0, 2, 1, 3))?.reshape((b_sz, seq_len, ()))?;
-        let out = self.w_down.forward(&(o_gate * h_out)?)?;
+        // 4. State Update for continuity (Last step)
+        let last_idx = seq_len - 1;
+        let last_m = m.narrow(2, last_idx, 1)?.squeeze(3)?;
+        let final_norm = total_n_vector.narrow(2, last_idx, 1)?.squeeze(2)?;
 
-        // Estado final parcial
-        let final_state = MLstmstate::new(
-            Tensor::zeros((b_sz, self.num_heads, self.head_dim, self.head_dim), DType::F32, dev)?,
-            Tensor::zeros((b_sz, self.num_heads, self.head_dim), DType::F32, dev)?,
-            m.narrow(2, seq_len - 1, 1)?.squeeze(3)?
-        );
+        let final_cell = if let Some(state) = state_prev {
+             let m_prev = state.m_t.unsqueeze(2)?.broadcast_as((b_sz, self.num_heads, 1, 1))?;
+             let f_last = s.narrow(2, last_idx, 1)?.unsqueeze(3)?.broadcast_add(&m_prev)?.broadcast_sub(&m.narrow(2, last_idx, 1)?)?.exp()?;
+             
+             let last_row_weights = d_prime.narrow(2, last_idx, 1)?; // [B, H, 1, S]
+             let weighted_v = v.broadcast_mul(&last_row_weights.transpose(2, 3)?)?; 
+             let cell_update = weighted_v.transpose(2, 3)?.matmul(&k)?; 
+             
+             (state.cell.broadcast_mul(&f_last)? + cell_update)?
+        } else {
+             let last_row_weights = d_prime.narrow(2, last_idx, 1)?;
+             let weighted_v = v.broadcast_mul(&last_row_weights.transpose(2, 3)?)?;
+             weighted_v.transpose(2, 3)?.matmul(&k)?
+        };
+
+        // 5. Output Projection
+        let h_combined = h_norm.permute((0, 2, 1, 3))?.reshape((b_sz, seq_len, ()))?;
+        let out = self.w_down.forward(&(o_gate * h_combined)?)?;
+
+        let final_state = MLstmstate::new(final_cell, final_norm, last_m);
 
         Ok((out, final_state))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_core::{Device, DType, Tensor};
+    use candle_nn::VarMap;
+
+    #[test]
+    fn test_mlstm_shapes() -> Result<()> {
+        let device = Device::Cpu;
+        let b_sz = 2;
+        let seq_len = 8;
+        let d_in = 16;
+        let d_hid = 32;
+        let n_heads = 4;
+        
+        let config = MLstmconfig::new(d_in, d_hid, 1, n_heads);
+        let varmap = VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let model = config.init(vb)?;
+        
+        let input = Tensor::randn(0f32, 1f32, (b_sz, seq_len, d_in), &device)?;
+        let (output, states) = model.forward(&input, None)?;
+        
+        assert_eq!(output.dims(), &[b_sz, seq_len, d_hid]);
+        assert_eq!(states.len(), 1);
+        
+        // head_dim = (d_hid * expansion_factor) / n_heads = (32 * 2) / 4 = 16
+        let head_dim = 16;
+        assert_eq!(states[0].cell.dims(), &[b_sz, n_heads, head_dim, head_dim]);
+        assert_eq!(states[0].normalizer.dims(), &[b_sz, n_heads, head_dim]);
+        assert_eq!(states[0].m_t.dims(), &[b_sz, n_heads, 1]);
+        
+        Ok(())
+    }
+
+    #[test]
+    fn test_mlstm_continuity() -> Result<()> {
+        let device = Device::Cpu;
+        let b_sz = 1;
+        let d_in = 8;
+        let d_hid = 16;
+        let n_heads = 2;
+        
+        let config = MLstmconfig::new(d_in, d_hid, 1, n_heads);
+        let varmap = VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let model = config.init(vb)?;
+        
+        // First half of sequence
+        let input1 = Tensor::randn(0f32, 1f32, (b_sz, 4, d_in), &device)?;
+        let (_, states1) = model.forward(&input1, None)?;
+        
+        // Second half of sequence
+        let input2 = Tensor::randn(0f32, 1f32, (b_sz, 4, d_in), &device)?;
+        let (output2, _states2) = model.forward(&input2, Some(states1.clone()))?;
+        
+        // Verify output is different when state is injected
+        let (output2_no_state, _) = model.forward(&input2, None)?;
+        
+        let diff = (output2 - output2_no_state)?.abs()?.sum_all()?.to_scalar::<f32>()?;
+        assert!(diff > 1e-5, "State injection should change the output: diff = {}", diff);
+        
+        Ok(())
     }
 }
