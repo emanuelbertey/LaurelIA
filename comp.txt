@@ -8,10 +8,19 @@ $env:RUST_BACKTRACE=1; cargo run --release --bin mlstmchat -- input.txt
 
 $env:RUST_BACKTRACE=1; cargo run --release --bin xlstmchat -- input.txt
 
-$env:RUST_BACKTRACE=1; cargo run --release --bin slstmchat -- dataset.txt
+$env:RUST_BACKTRACE=1; cargo run --release --bin slstmchat -- input.txt
 
 $env:RUST_BACKTRACE=1; cargo run --release --bin testxlstm -- input.txt
 
+$env:RUST_BACKTRACE=1; cargo run --release --bin multi -- input.txt
+
+$env:RUST_BACKTRACE=1; cargo run --release --bin 2slstmchat -- input.txt
+
+cargo run --release --bin xlstm_core_train -- input.txt
+
+$env:RUST_BACKTRACE=1; cargo run --release --bin mlstmnew -- input.txt
+
+cargo run --release --bin xlstm_core_train -- input.txt
 
 cargo run --release --bin mlstmchat -- input.txt
 
