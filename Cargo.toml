@@ -47,6 +47,14 @@ path = "src/slstmchat.rs"
 name = "2slstmchat"
 path = "src/slstmchat2.rs"
 
+[[bin]]
+name = "cortexslstm"
+path = "src/cortexslstm.rs"
+
+[[bin]]
+name = "cortexthread"
+path = "src/cortexthread.rs"
+
 
 [[bin]]
 name = "xlstmchat"

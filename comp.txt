@@ -26,3 +26,6 @@ cargo run --release --bin xlstm_core_train -- input.txt
 
 cargo run --release --bin mlstmchat -- input.txt
 
+$env:RUST_BACKTRACE=1; cargo run --release --bin cortexslstm -- input.txt
+
+$env:RUST_BACKTRACE=1; cargo run --release --bin cortexthread -- input.txt

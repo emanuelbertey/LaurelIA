@@ -394,9 +394,9 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
     let output_size = vocab_size; 
     let dropout = 0.0;
 
-    let seq_length = 128; 
-    let batch_size = 16; 
-    let stride = 128;     
+    let seq_length = 64; 
+    let batch_size = 24; 
+    let stride = 64;     
     let num_epochs = 50;
     let num_heads = 2;
 
@@ -472,35 +472,14 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
             LstmType::Custom(ref types) => types.clone(),
         };
 
-        let mut slstm_params = Vec::new();
-        let mut mlstm_params = Vec::new();
-        let mut other_params = Vec::new();
-
+        let mut params = Vec::new();
         let data = varmap.data().lock().unwrap();
-        for (name, var) in data.iter() {
-            if name.starts_with("block_") {
-                let parts: Vec<&str> = name.split('.').collect();
-                if let Some(block_part) = parts.first() {
-                    if let Some(idx_str) = block_part.strip_prefix("block_") {
-                         if let Ok(idx) = idx_str.parse::<usize>() {
-                             if idx < parsed_block_types.len() {
-                                 match parsed_block_types[idx] {
-                                     BlockType::SLSTM => slstm_params.push(var.clone()),
-                                     BlockType::MLSTM => mlstm_params.push(var.clone()),
-                                 }
-                             } else { other_params.push(var.clone()); }
-                         } else { other_params.push(var.clone()); }
-                    } else { other_params.push(var.clone()); }
-                } else { other_params.push(var.clone()); }
-            } else { other_params.push(var.clone()); }
+        for (_, var) in data.iter() {
+            params.push(var.clone());
         }
         drop(data); // release lock before training
 
-        // Tasas de aprendizaje recomendadas para xLSTM: 
-        // sLSTM suele tolerar LRs más altas, mLSTM requiere más cuidado.
-        let mut optim_slstm = AdamW::new(slstm_params, ParamsAdamW { lr: 2e-4, ..Default::default() })?;
-        let mut optim_mlstm = AdamW::new(mlstm_params, ParamsAdamW { lr: 8e-5, ..Default::default() })?;
-        let mut optim_other = AdamW::new(other_params, ParamsAdamW { lr: 2e-4, ..Default::default() })?;
+        let mut optimizer = AdamW::new(params, ParamsAdamW { lr: 1e-4, ..Default::default() })?;
 
         println!("Iniciando entrenamiento...\n");
         model.print_architecture();
@@ -567,9 +546,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
                 */
 
                 // Ahora los optimizadores usarán los gradientes clipeados
-                optim_slstm.step(&grads)?;
-                optim_mlstm.step(&grads)?;
-                optim_other.step(&grads)?;
+                optimizer.step(&grads)?;
 
                 if batch_idx % 1 == 0 || batch_idx == num_batches - 1 {
                     let elapsed = epoch_start.elapsed().as_secs_f32();

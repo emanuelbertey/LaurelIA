@@ -474,7 +474,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
 
         // Tasas de aprendizaje recomendadas para xLSTM: 
         // sLSTM suele tolerar LRs más altas, mLSTM requiere más cuidado.
-        let mut optim_slstm = AdamW::new(slstm_params, ParamsAdamW { lr: 3e-4, ..Default::default() })?;
+        let mut optim_slstm = AdamW::new(slstm_params, ParamsAdamW { lr: 1e-4, ..Default::default() })?;
         let mut optim_mlstm = AdamW::new(mlstm_params, ParamsAdamW { lr: 8e-5, ..Default::default() })?;
         let mut optim_other = AdamW::new(other_params, ParamsAdamW { lr: 2e-4, ..Default::default() })?;
 
