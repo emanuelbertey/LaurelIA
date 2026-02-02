@@ -388,9 +388,9 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
     println!("Tokens totales: {}\n", tokens.len());
 
     let vocab_size = tokenizer.vocab_size();
-    let hidden_size = 256; 
+    let hidden_size = 320; 
     let num_layers = 1;
-    let num_blocks = 3;
+    let num_blocks = 2;
     let output_size = vocab_size; 
     let dropout = 0.0;
 
@@ -498,7 +498,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
 
         // Tasas de aprendizaje recomendadas para xLSTM: 
         // sLSTM suele tolerar LRs más altas, mLSTM requiere más cuidado.
-        let mut optim_slstm = AdamW::new(slstm_params, ParamsAdamW { lr: 12e-4, ..Default::default() })?;
+        let mut optim_slstm = AdamW::new(slstm_params, ParamsAdamW { lr: 2e-4, ..Default::default() })?;
         let mut optim_mlstm = AdamW::new(mlstm_params, ParamsAdamW { lr: 8e-5, ..Default::default() })?;
         let mut optim_other = AdamW::new(other_params, ParamsAdamW { lr: 2e-4, ..Default::default() })?;
 

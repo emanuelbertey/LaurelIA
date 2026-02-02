@@ -365,17 +365,17 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
     println!("Tokens totales: {}\n", tokens.len());
 
     let vocab_size = tokenizer.vocab_size();
-    let hidden_size = 512; 
+    let hidden_size = 256; 
     let num_layers = 1;
-    let num_blocks = 3;
+    let num_blocks = 5;
     let output_size = vocab_size; 
     let  mut dropout = 0.0;
 
-    let seq_length = 128; 
-    let batch_size = 16; 
-    let stride = 128;     
+    let seq_length = 64; 
+    let batch_size = 20; 
+    let stride = 64;     
     let num_epochs = 50;
-    let num_heads = 4;
+    let num_heads = 16;
 
     println!("Configuración del modelo:");
     println!("  Bloques: {}", num_blocks);
@@ -484,11 +484,11 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
 
 
         model.print_architecture();
-        let lr_max = 1e-3;
-        let lr_min = 6e-6;
+        let lr_max = 2.5e-4;
+        let lr_min = 1.5e-4;
         let mut aumentando = false; // Control de dirección
         let step_factor = 0.985;      // Qué tan rápido cambia
-        let mut current_lr = 1e-4;
+        let mut current_lr = 2e-4;
         let mut optim_mlstm = AdamW::new(mlstm_params.clone(), ParamsAdamW { 
             lr: current_lr, 
             ..Default::default() 
@@ -504,7 +504,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
             let mut num_losses = 0;
             let mut correct = 0;
             let mut total = 0;
-            let mut current_state = None;
+           // let mut current_state = None;
             for batch_idx in 0..num_batches {
                 let epoch_start = Instant::now();
                 let current_batch_start_seq = batch_idx * batch_size;
@@ -522,17 +522,17 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
                     &device,
                 )?;
 
-                if batch_idx == 0 {
+             /*   if batch_idx == 0 {
                 // Hacemos un forward silencioso para llenar las matrices del mLSTM
                 let (_, warm_state) = model.forward(&input_batch, None)?;
                 current_state = Some(warm_state.into_iter().map(|s| s.map(|state| state.detach())).collect());
                 println!("> Estado inicializado con éxito en el Batch 0");
               }
-               
+               */
              
-              //  let (logits, _) = model.forward(&input_batch,  None)?;
-               let (logits, next_state) = model.forward(&input_batch, current_state)?;
-                current_state = Some(next_state.into_iter().map(|s| s.map(|state| state.detach())).collect());
+              let (logits, _) = model.forward(&input_batch,  None)?;
+              // let (logits, next_state) = model.forward(&input_batch, current_state)?;
+                //current_state = Some(next_state.into_iter().map(|s| s.map(|state| state.detach())).collect());
 
 
                 // Optimization
@@ -568,7 +568,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
                 
                 }
             
-                 if batch_idx % 5 == 0 && batch_idx > 0 {
+                 if batch_idx % 15 == 0 && batch_idx > 0 {
                     let factor = step_factor as f32; //  errores
 
                     if aumentando {
@@ -588,7 +588,7 @@ println!("DEBUG SALTO: {:?}", prueba_salto);
                             aumentando = true; 
                         }
                     }
-                    dropout = dropout.clamp(0.001, 0.007);
+                    dropout = dropout.clamp(0.05, 0.15);
                     model.blocks.iter_mut().for_each(|b| b.dropout_prob = dropout);
             
                     println!(

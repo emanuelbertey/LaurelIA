@@ -7,6 +7,8 @@ cargo run --release --bin mlstmchat -- input.txt
 $env:RUST_BACKTRACE=1; cargo run --release --bin mlstmchat -- input.txt
 
 $env:RUST_BACKTRACE=1; cargo run --release --bin xlstmchat -- input.txt
+ 
+ ParamsAdamW lr: 6e-3   slstmchat
 
 $env:RUST_BACKTRACE=1; cargo run --release --bin slstmchat -- input.txt
 
