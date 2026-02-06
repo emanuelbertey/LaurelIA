@@ -176,8 +176,8 @@ impl XLstmblock {
         // 5. RESIDUAL CONNECTION (Pre-Norm Style)
         // Sumamos el resultado a 'input_seq' original (el que no fue normalizado)
         // Esto crea el "highway" de gradientes limpio.
-       // let output = (output + input_seq)?;
-       let output = ((output * 0.8)? + input_seq)?;
+      // let output = (output + input_seq)?;
+          let output = ((output * 0.9)? + (input_seq * 0.7)?)?;
 
         Ok((output, new_state))
     }
